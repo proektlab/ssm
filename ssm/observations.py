@@ -480,3 +480,188 @@ class RecurrentRobustAutoRegressiveObservations(
     _RecurrentAutoRegressiveObservationsMixin, 
     RobustAutoRegressiveObservations):
     pass
+
+
+class DiagonalAutoRegressiveObservations(_Observations):
+    """
+    Special case of an AR model in which the output dimensions
+    do not interact.  They just independently evolve with a switching
+    drive determined by a shared underlying discrete state. 
+
+    x_{td} = a_d x_{t-1, d} + b_d + noise
+
+    where a_d in [0,1] for d = 1, ..., D
+
+    """
+    def __init__(self, K, D, M=0, fp_max=4):
+        super(DiagonalAutoRegressiveObservations, self).__init__(K, D, M)
+        
+        # Distribution over initial point
+        self.mu_init = np.zeros(D)
+        self.inv_sigma_init = np.zeros(D)
+        
+        # AR parameters
+        assert fp_max > 0
+        self.fp_max = fp_max
+        self.logit_fixed_points = npr.randn(K, D)
+        
+        self.inv_taus = npr.randn(K, D)
+        
+        self.Vs = npr.randn(K, D, M)
+        self.inv_sigmas = -4 + npr.randn(K, D)
+
+    @property
+    def params(self):
+        return self.logit_fixed_points, self.inv_taus, self.Vs, self.inv_sigmas
+        
+    @params.setter
+    def params(self, value):
+        self.logit_fixed_points, self.inv_taus, self.Vs, self.inv_sigmas = value
+
+    @property
+    def fixed_points(self):
+        return -self.fp_max + 2 * self.fp_max * logistic(self.logit_fixed_points)
+
+    @property
+    def taus(self):
+        return 1 + np.exp(self.inv_taus)
+        
+    @property
+    def As(self):
+        return 1 - 1 / self.taus
+
+    @property
+    def bs(self):
+        return self.fixed_points / self.taus
+
+    def log_prior(self):
+        # return np.sum(norm.logpdf(self.fixed_points, 0, 1)) + \
+        #        np.sum(gamma.logpdf((self.taus - 1) / 10, 1))
+        # return np.sum(gamma.logpdf((self.taus - 1) / 10, 1))
+        return 0
+
+    def permute(self, perm):
+        self.logit_fixed_points = self.fixed_points[perm]
+        self.inv_taus = self.inv_taus[perm]
+        self.Vs = self.Vs[perm]
+        self.inv_sigmas = self.inv_sigmas[perm]
+
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        data = np.concatenate(datas) 
+        input = np.concatenate(inputs)
+        T = data.shape[0]
+    
+        from sklearn.cluster import KMeans
+        km = KMeans(self.K)
+        km.fit(data)
+        z = km.labels_[:-1]
+
+        # Cluster the data before initializing
+        from sklearn.linear_model import LinearRegression
+        
+        for k in range(self.K):
+            ts = np.where(z == k)[0]
+
+            for d in range(self.D):
+                x, y = np.column_stack((data[ts, d], input[ts], np.ones_like(ts))), data[ts+1, d]
+                w, sumsq, _, _ = np.linalg.lstsq(x, y, rcond=None)
+                
+                # Set tau via As[k, d]
+                a_kd = np.clip(w[0], 1e-4, 1-1e-4)
+                tau_kd = 1 / (1 - a_kd)
+                self.inv_taus[k, d] = np.log(tau_kd - 1)
+                # tau_kd = np.clip(tau_kd, 1+1e-2, self.tau_max - 1 - 1e-2)
+                # self.logit_taus[k, d] = logit((tau_kd - 1) / self.tau_max)
+
+                # Set the fixed point via b
+                fp_kd = w[-1] * tau_kd
+                fp_kd = np.clip(fp_kd, -self.fp_max + 1e-2, self.fp_max - 1e-2)
+                self.logit_fixed_points[k, d] = logit((self.fp_max + fp_kd) / (2 * self.fp_max))
+
+                # Set the input drive
+                self.Vs[k, d] = w[1:-1]
+                
+                # Set the observation noise
+                self.inv_sigmas[k, d] = np.log(sumsq / len(ts) + 1e-8)
+
+            assert np.all(np.isfinite(self.inv_sigmas))
+        
+    def _compute_mus(self, data, input, mask, tag):
+        assert np.all(mask), "ARHMM cannot handle missing data"
+        As, bs, Vs = self.As, self.bs, self.Vs
+
+        # linear function of preceding data, current input, and bias
+        mus = As[None, :, :] * data[:-1, None, :] 
+        mus = mus + np.matmul(Vs[None, ...], input[1:, None, :, None])[:, :, :, 0]
+        mus = mus + bs
+
+        # Pad with the initial condition
+        mus = np.concatenate((self.mu_init * np.ones((1, self.K, self.D)), mus))
+        return mus
+
+    def log_likelihoods(self, data, input, mask, tag):
+        mus = self._compute_mus(data, input, mask, tag)
+        sigmas = np.exp(self.inv_sigmas)
+        return -0.5 * np.sum(
+            (np.log(2 * np.pi * sigmas) + (data[:, None, :] - mus)**2 / sigmas) 
+            * mask[:, None, :], axis=2)
+
+    # def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+    #     from sklearn.linear_model import LinearRegression
+    #     D, M = self.D, self.M
+
+    #     us, xs, ys = [], [], []
+    #     for data, input in zip(datas, inputs):
+    #         us.append(input[:-1])
+    #         xs.append(data[:-1])
+    #         ys.append(data[1:])
+    #     us = np.concatenate(us)
+    #     xs = np.concatenate(xs)
+    #     ys = np.concatenate(ys)
+    #     T = ys.shape[0]
+        
+    #     for k in range(self.K):
+    #         weights = np.concatenate([Ez[1:,k] for Ez, _ in expectations])
+            
+    #         # Fit a weighted linear regression
+    #         # for d in range(self.D):
+    #         #     if weights.sum() > .1:
+    #         #         Xd = np.sqrt(weights)[:,None] * np.column_stack((xs[:, d], us, np.ones(T)))
+    #         #         yd = np.sqrt(weights) * ys[:, d]
+
+    #         #         w, sumsq, _, _ = np.linalg.lstsq(Xd, yd, rcond=None)
+    #         #         self.logit_As[k, d] = logit(np.clip(w[0], 1e-4, 1-1e-4))
+    #         #         self.Vs[k, d] = w[1:-1]
+    #         #         self.bs[k, d] = w[-1]
+    #         #         self.inv_sigmas[k, d] = np.log(sumsq / T + 1e-8)
+    #         #     else:
+    #         #         pass
+    #         #     assert np.all(np.isfinite(self.inv_sigmas))
+
+    #         # Fit a weighted linear regression
+    #         from sklearn.linear_model import LinearRegression
+    #         lr = LinearRegression()
+    #         lr.fit(np.hstack((xs, us)), ys, sample_weight=weights)
+    #         self.logit_As[k] = logit(np.clip(np.diag(lr.coef_[:,:D]), 1e-4, 1-1e-4))
+    #         self.Vs[k] = lr.coef_[:,D:]
+    #         self.bs[k] = lr.intercept_
+            
+        
+    def sample_x(self, z, xhist, input=None, tag=None):
+        D, As, bs, sigmas = self.D, self.As, self.bs, np.exp(self.inv_sigmas)
+        if xhist.shape[0] == 0:
+            mu_init = self.mu_init
+            sigma_init = np.exp(self.inv_sigma_init)
+            return mu_init + np.sqrt(sigma_init) * npr.randn(D)
+        else:
+            return As[z] * xhist[-1] + bs[z] + np.sqrt(sigmas[z]) * npr.randn(D)
+
+    def smooth(self, expectations, data, input, tag):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        T = expectations.shape[0]
+        mask = np.ones((T, self.D), dtype=bool) 
+        mus = self._compute_mus(data, input, mask, tag)
+        return (expectations[:, :, None] * mus).sum(1)
