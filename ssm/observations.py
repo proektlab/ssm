@@ -185,7 +185,7 @@ class StudentsTObservations(_Observations):
         """
         return expectations.dot(self.mus)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=10, optimizer="adam", **kwargs):
+    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=1, optimizer="adam", **kwargs):
         """
         Student's t is a scale mixture of Gaussians.  We can estimate its
         parameters using the EM algorithm. This amounts to estimating the 
@@ -801,7 +801,7 @@ class RobustAutoRegressiveObservations(AutoRegressiveObservations):
             gammaln((nus + D) / 2.0) - gammaln(nus / 2.0) - D / 2.0 * np.log(nus) \
             -D / 2.0 * np.log(np.pi) - 0.5 * np.sum(np.log(sigmas), axis=-1)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=10, optimizer="adam", **kwargs):
+    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=1, optimizer="adam", **kwargs):
         """
         Student's t is a scale mixture of Gaussians.  We can estimate its
         parameters using the EM algorithm. This amounts to estimating the 
@@ -839,10 +839,11 @@ class RobustAutoRegressiveObservations(AutoRegressiveObservations):
                 Afull = np.concatenate((self.As, self.Vs, self.bs[:, :, None]), axis=2)
                 mus = np.matmul(Afull[None, :, :, :], x[:, None, :, None])[:, :, :, 0]
                 sigmas = np.exp(self.inv_sigmas)
+                nus = np.exp(self.inv_nus[:, None])
 
                 # nu: (K,)  mus: (T, K, D)  sigmas: (K, D)  y: (T, D)  -> tau: (T, K, D)
-                alpha = np.exp(self.inv_nus[:, None])/2 + 1/2
-                beta = np.exp(self.inv_nus[:, None])/2 + 1/2 * (y[:, None, :] - mus)**2 / sigmas
+                alpha = nus/2 + 1/2
+                beta = nus/2 + 1/2 * (y[:, None, :] - mus)**2 / sigmas
                 taus.append(alpha / beta)
 
             # Fit a weighted linear regression for each discrete state

@@ -1,22 +1,25 @@
 # distutils: extra_compile_args = -O3
-# cython: wraparound=True
-# cython: boundscheck=True
-# cython: nonecheck=True
-# cython: cdivision=True
+# cython: wraparound=False
+# cython: boundscheck=False
+# cython: nonecheck=False
+# cython: cdivision=False
 
 import numpy as np
 cimport numpy as np
 
-from libc.math cimport log, exp, fmax
+from libc.math cimport log, exp, fmax, INFINITY
 
-cdef double logsumexp(double[::1] x):
+from cython.parallel import prange
+
+
+cdef double logsumexp(double[::1] x) nogil:
     cdef int i, N
     cdef double m, out
 
     N = x.shape[0]
 
     # find the max
-    m = -np.inf
+    m = -INFINITY
     for i in range(N):
         m = fmax(m, x[i])
 
@@ -60,16 +63,17 @@ cpdef forward_pass(double[::1] log_pi0,
     assert alphas.shape[0] == T
     assert alphas.shape[1] == K
 
-    cdef double[::1] tmp = np.zeros(K)
+    cdef double[:, ::1] tmp = np.zeros((K, K))
 
     for k in range(K):
         alphas[0, k] = log_pi0[k] + log_likes[0, k]
 
-    for t in range(T - 1):
-        for k in range(K):
-            for j in range(K):
-                tmp[j] = alphas[t, j] + log_Ps[t, j, k]
-            alphas[t+1, k] = logsumexp(tmp) + log_likes[t+1, k]
+    with nogil:
+        for t in range(T - 1):
+            for k in prange(K):
+                for j in range(K):
+                    tmp[k, j] = alphas[t, j] + log_Ps[t, j, k]
+                alphas[t+1, k] = logsumexp(tmp[k]) + log_likes[t+1, k]
 
     return logsumexp(alphas[T-1])
 
@@ -86,18 +90,19 @@ cpdef backward_pass(double[:,:,::1] log_Ps,
     assert betas.shape[0] == T
     assert betas.shape[1] == K
 
-    cdef double[::1] tmp = np.zeros(K)
+    cdef double[:, ::1] tmp = np.zeros((K, K))
 
     # Initialize the last output
     for k in range(K):
         betas[T-1, k] = 0
 
-    for t in range(T-2,-1,-1):
-        # betal[t] = logsumexp(Al + betal[t+1] + aBl[t+1],axis=1)
-        for k in range(K):
-            for j in range(K):
-                tmp[j] = log_Ps[t, k, j] + betas[t+1, j] + log_likes[t+1, j]
-            betas[t, k] = logsumexp(tmp)
+    with nogil:
+        for t in range(T-2,-1,-1):
+            # betal[t] = logsumexp(Al + betal[t+1] + aBl[t+1],axis=1)
+            for k in prange(K):
+                for j in range(K):
+                    tmp[k, j] = log_Ps[t, k, j] + betas[t+1, j] + log_likes[t+1, j]
+                betas[t, k] = logsumexp(tmp[k])
 
 
 cpdef backward_sample(double[:,:,::1] log_Ps,
