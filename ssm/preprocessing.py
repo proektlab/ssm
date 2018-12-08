@@ -76,15 +76,21 @@ def factor_analysis_with_imputation(D, datas, masks=None, num_iters=50):
     C, S, VT = np.linalg.svd(fa.W, full_matrices=False)
     xhats = [x.dot(VT.T) for x in xs]
 
+    
     # Test that we got this right
     for x, xhat in zip(xs, xhats):
         y = x.dot(fa.W.T) + fa.mean
         yhat = xhat.dot((C * S).T) + fa.mean
         assert np.allclose(y, yhat)
 
-    # Strip out the data from the factor analysis model, 
-    # update the emission matrix
+    # Update the emission matrix
+    ll0 = fa.log_likelihood()
     fa.regression.A = C * S
+    ll1 = fa.log_likelihood()
+    assert np.allclose(ll0, ll1)
+
+
+    # Strip out the data from the factor analysis model
     fa.data_list = []
 
     return fa, xhats, lls

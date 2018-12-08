@@ -454,6 +454,57 @@ class RBFRecurrentTransitions(_Transitions):
         log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
+    def _approximate_m_step(self, k, expectations, datas, inputs, masks, tags, **kwargs):
+        """
+        Approximate the multinomial likelihood with a Poisson likelihood and fit
+        a bunch of independent Poisson GLMs.  Let z_{tk} = I[z_t = k].  
+        The likelihood of the weights for state k is approximately,
+
+            z_{tk} ~ Po(lambda_k(x_t))
+
+        where 
+            lambda_k(x_t) = exp{ log_Ps[k, z_{t-1}] -0.5 * vec(J)^T vec(x_t x_t^T) + h^T x_t }
+
+        so the log likelihood is
+
+            log p(z_{tk}) 
+                = -lambda_k(x_t) + z_{tk} log lambda_k(x_t)
+
+                = -exp{ log_Ps[z_{t-1}, k] -0.5 * vec(J)^T vec(x_t x_t^T) + h^T x_t }
+                  + z_{tk} [log_Ps[z_{t-1}, k] -0.5 * vec(J)^T vec(x_t x_t^T) + h^T x_t]
+
+        The expected log likelihood is,
+
+            E[log p(zt)] = 
+                -[sum_j Pr(z_{t-1}=j) exp{logPk^T I[z_{t-1}=j] -0.5 * vec(J)^T vec(x_t x_t^T) + h^T x_t}
+                + sum_j Pr(z_{t-1}, z_t=k) log_Pk^T I[z_{t-1}=j]
+                + Pr(z_t=k) * (-0.5 * vec(J)^T vec(x_t x_t^T) + h^T x_t)
+
+        The gradient wrt logPk is 
+
+        """
+        # Precompute outer products of the data
+        xxTs = [np.reshape(data[:,:,None] * data[:,None,:], (data.shape[0], -1)) for data in datas]
+
+        def objective(k, prms):
+            logPk, Jk_sqrt, hk = prms
+            Jk_vec = np.ravel(np.dot(Jk_sqrt, Jk_sqrt.T))
+
+            elp = 0
+            for (Ez, Ezzp1, _), x, xxT, u in zip(expectations, datas, xxTs, inputs):
+                elp += -np.sum(Ez[:-1] * np.exp(logPk), axis=1) 
+                       * np.exp(-0.5 * np.sum(Jk_vec * xxT[:-1], axis=1))
+                       * np.exp(np.sum(hk * x[:-1], axis=1))
+
+                elp += np.sum(Ezzp1[:,:,k] * logPk, axis=1)
+                elp += Ez[1:] * (-0.5 * np.sum(Jk_vec * xxT[:-1], axis=1))
+                elp += Ez[1:] * (-0.5 * np.sum(hk * x[:-1], axis=1))
+
+        for k in range(K):
+
+        for (Ez, Ezzp1, _), data, input in zip(expectations, datas, inputs):
+
+
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         """
         We want to optimize :math:`\sum_t \log p(z_{t_1} | z_t, x_t; theta) wrt theta

@@ -322,7 +322,7 @@ def convert_lds_to_block_tridiag(As, bs, Qi_sqrts, ms, Ri_sqrts):
     and per-timestep Gaussian observations.
 
         p(x_{1:T}; theta) 
-            = [prod_{t=1}^{T-1} N(x_{t+1} | A_t x_t + b_t, Q_t)] 
+            \propto [prod_{t=1}^{T-1} N(x_{t+1} | A_t x_t + b_t, Q_t)] 
                 * [prod_{t=1}^T N(x_t | m_t, R_t)]  
 
     We can rewrite this as a Gaussian with a block tridiagonal precision
