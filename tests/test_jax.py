@@ -52,6 +52,6 @@ if __name__ == "__main__":
     grad_hmm_normalizer(onp.copy(log_Ps), alphas, dlog_pi0, dlog_Ps, dlls)
 
     # Compare manual grads to JAX grads
-    assert np.allclose(dlog_pi0, grad(hmm_normalizer_np, argnums=0)(log_pi0, log_Ps, lls))
-    assert np.allclose(dlog_Ps, grad(hmm_normalizer_np, argnums=1)(log_pi0, log_Ps, lls))
-    assert np.allclose(dlls, grad(hmm_normalizer_np, argnums=2)(log_pi0, log_Ps, lls))
+    assert onp.allclose(dlog_pi0, grad(hmm_normalizer_np, argnums=0)(log_pi0, log_Ps, lls))
+    assert onp.allclose(dlog_Ps, grad(hmm_normalizer_np, argnums=1)(log_pi0, log_Ps, lls))
+    assert onp.allclose(dlls, grad(hmm_normalizer_np, argnums=2)(log_pi0, log_Ps, lls))
