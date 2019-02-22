@@ -1,15 +1,9 @@
-from functools import partial
-from warnings import warn
-
 import autograd.numpy as np
-import autograd.numpy.random as npr
 from autograd.scipy.misc import logsumexp
-from autograd.misc.optimizers import sgd, adam
-from autograd import grad
 
 class InitialStateDistribution(object):
-    def __init__(self, K, D, M=0):
-        self.log_pi0 = -np.log(K) * np.ones(K)
+    def __init__(self, num_states, observation_dim, input_dim=0):
+        self.log_pi0 = -np.log(num_states) * np.ones(num_states)
 
     @property
     def params(self):
@@ -19,7 +13,7 @@ class InitialStateDistribution(object):
     def params(self, value):
         self.log_pi0 = value[0]
 
-    def initialize(self, datas, inputs, masks, tags):
+    def initialize(self, dataset):
         pass
 
     def permute(self, perm):
@@ -35,10 +29,9 @@ class InitialStateDistribution(object):
     def log_prior(self):
         return 0
 
-    def log_initial_state_distn(self, data, input, mask, tag):
+    def log_initial_state_distn(self, data):
         return self.log_pi0 - logsumexp(self.log_pi0)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+    def m_step(self, expectations, dataset, **kwargs):
         pi0 = sum([Ez[0] for Ez, _, _ in expectations]) + 1e-8
         self.log_pi0 = np.log(pi0 / pi0.sum())
-

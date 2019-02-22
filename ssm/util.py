@@ -84,88 +84,69 @@ def random_rotation(n, theta=None):
     return q.dot(out).dot(q.T)
 
 
-def ensure_args_are_lists(f):
-    def wrapper(self, datas, inputs=None, masks=None, tags=None, **kwargs):
-        datas = [datas] if not isinstance(datas, (list, tuple)) else datas
+def _check_data(model, data):
+    make_tuple = lambda x: (x,) if isinstance(x, int) else x
+    observation_dim = make_tuple(model.observation_dim)
+    input_dim = make_tuple(model.input_dim)
 
-        M = (self.M,) if isinstance(self.M, int) else self.M
-        assert isinstance(M, tuple)
+    # Make sure required keys are present
+    assert 'data' in data
+    assert data['data'].shape[1:] == observation_dim
+    T = data['data'].shape[0]
 
-        if inputs is None:
-            inputs = [np.zeros((data.shape[0],) + M) for data in datas]
-        elif not isinstance(inputs, (list, tuple)):
-            inputs = [inputs]
+    # Check for inputs
+    if 'input' in data:
+        assert data['input'].shape == (T,) + input_dim
+    elif input_dim == (0,):
+        data['input'] = np.zeros((T,0))
+    else:
+        raise Exception("Expected input of shape {} in data dict"\
+                        .format((T,) + input_dim))
 
-        if masks is None:
-            masks = [np.ones_like(data, dtype=bool) for data in datas]
-        elif not isinstance(masks, (list, tuple)):
-            masks = [masks]
-
-        if tags is None:
-            tags = [None] * len(datas)
-        elif not isinstance(tags, (list, tuple)):
-            tags = [tags]
-
-        return f(self, datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
-
-    return wrapper
+    # Check mask
+    if 'mask' in data:
+        assert data['mask'].shape == (T,) + observation_dim
+        assert data['mask'].dtype == bool
+    else:
+        # No mask given; assume all data present
+        data['mask'] = np.ones((T,) + observation_dim, dtype=bool)
 
 
-def ensure_variational_args_are_lists(f):
-    def wrapper(self, arg0, datas, inputs=None, masks=None, tags=None, **kwargs):
-        datas = [datas] if not isinstance(datas, (list, tuple)) else datas
+def check_dataset(f):
+    def wrapper(self, dataset, **kwargs):
+        dataset = [dataset] if not isinstance(dataset, (list, tuple)) else dataset
 
-        try:
-            M = (self.M,) if isinstance(self.M, int) else self.M
-        except:
-            # self does not have M if self is a variational posterior object
-            # in that case, arg0 is a model, which does have an M parameter
-            M = (arg0.M,) if isinstance(arg0.M, int) else arg0.M
+        for data in dataset:
+            _check_data(self, data)
 
-        assert isinstance(M, tuple)
-
-        if inputs is None:
-            inputs = [np.zeros((data.shape[0],) + M) for data in datas]
-        elif not isinstance(inputs, (list, tuple)):
-            inputs = [inputs]
-
-        if masks is None:
-            masks = [np.ones_like(data, dtype=bool) for data in datas]
-        elif not isinstance(masks, (list, tuple)):
-            masks = [masks]
-
-        if tags is None:
-            tags = [None] * len(datas)
-        elif not isinstance(tags, (list, tuple)):
-            tags = [tags]
-
-        return f(self, arg0, datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
+        return f(self, dataset, **kwargs)
 
     return wrapper
 
 
-def ensure_args_not_none(f):
-    def wrapper(self, data, input=None, mask=None, tag=None, **kwargs):
+def check_variational_args(f):
+    def wrapper(self, arg0, dataset, **kwargs):
+        dataset = [dataset] if not isinstance(dataset, (list, tuple)) else dataset
+        for data in dataset:
+            _check_data(self, data)
+
+        return f(self, arg0, dataset, **kwargs)
+    return wrapper
+
+
+def check_data(f):
+    def wrapper(self, data, **kwargs):
         assert data is not None
-
-        M = (self.M,) if isinstance(self.M, int) else self.M
-        assert isinstance(M, tuple)
-        input = np.zeros((data.shape[0],) + M) if input is None else input
-
-        mask = np.ones_like(data, dtype=bool) if mask is None else mask
-        return f(self, data, input=input, mask=mask, tag=tag, **kwargs)
+        _check_data(self, data)
+        return f(self, data, **kwargs)
     return wrapper
 
 
-def ensure_slds_args_not_none(f):
-    def wrapper(self, variational_mean, data, input=None, mask=None, tag=None, **kwargs):
+def check_slds_args(f):
+    def wrapper(self, variational_mean, data, **kwargs):
         assert variational_mean is not None
-        assert data is not None
-        M = (self.M,) if isinstance(self.M, int) else self.M
-        assert isinstance(M, tuple)
-        input = np.zeros((data.shape[0],) + M) if input is None else input
-        mask = np.ones_like(data, dtype=bool) if mask is None else mask
-        return f(self, variational_mean, data, input=input, mask=mask, tag=tag, **kwargs)
+        _check_data(self, data)
+        return f(self, variational_mean, data, **kwargs)
     return wrapper
 
 

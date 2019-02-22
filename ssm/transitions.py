@@ -14,8 +14,10 @@ from ssm.optimizers import adam, bfgs, rmsprop, sgd
 
 
 class _Transitions(object):
-    def __init__(self, K, D, M=0):
-        self.K, self.D, self.M = K, D, M
+    def __init__(self, num_states, observation_dim, input_dim=0):
+        self.num_states = num_states
+        self.observation_dim = observation_dim
+        self.input_dim = input_dim
 
     @property
     def params(self):
@@ -25,7 +27,7 @@ class _Transitions(object):
     def params(self, value):
         raise NotImplementedError
 
-    def initialize(self, datas, inputs, masks, tags):
+    def initialize(self, dataset):
         pass
 
     def permute(self, perm):
@@ -34,10 +36,10 @@ class _Transitions(object):
     def log_prior(self):
         return 0
 
-    def log_transition_matrices(self, data, input, mask, tag):
+    def log_transition_matrices(self, data):
         raise NotImplementedError
 
-    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="bfgs", num_iters=100, **kwargs):
+    def m_step(self, expectations, dataset, optimizer="bfgs", num_iters=100, **kwargs):
         """
         If M-step cannot be done in closed form for the transitions, default to BFGS.
         """
@@ -46,14 +48,13 @@ class _Transitions(object):
         # Maximize the expected log joint
         def _expected_log_joint(expectations):
             elbo = self.log_prior()
-            for data, input, mask, tag, (expected_states, expected_joints, _) \
-                in zip(datas, inputs, masks, tags, expectations):
-                log_Ps = self.log_transition_matrices(data, input, mask, tag)
+            for data, (expected_states, expected_joints, _) in zip(datas, expectations):
+                log_Ps = self.log_transition_matrices(data)
                 elbo += np.sum(expected_joints * log_Ps)
             return elbo
 
         # Normalize and negate for minimization
-        T = sum([data.shape[0] for data in datas])
+        T = sum([data['data'].shape[0] for data in datas])
         def _objective(params, itr):
             self.params = params
             obj = _expected_log_joint(expectations)
@@ -67,9 +68,10 @@ class StationaryTransitions(_Transitions):
     """
     Standard Hidden Markov Model with fixed initial distribution and transition matrix.
     """
-    def __init__(self, K, D, M=0):
-        super(StationaryTransitions, self).__init__(K, D, M=M)
-        Ps = .95 * np.eye(K) + .05 * npr.rand(K, K)
+    def __init__(self, num_states, observation_dim, input_dim=0):
+        super(StationaryTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim)
+        Ps = .95 * np.eye(num_states) + .05 * npr.rand(num_states, num_states)
         Ps /= Ps.sum(axis=1, keepdims=True)
         self.log_Ps = np.log(Ps)
 
@@ -91,12 +93,12 @@ class StationaryTransitions(_Transitions):
     def transition_matrix(self):
         return np.exp(self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True))
 
-    def log_transition_matrices(self, data, input, mask, tag):
-        T = data.shape[0]
+    def log_transition_matrices(self, data):
+        T = data['data'].shape[0]
         log_Ps = self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True)
         return np.tile(log_Ps[None, :, :], (T-1, 1, 1))
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+    def m_step(self, expectations, dataset, **kwargs):
         P = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-16
         P /= P.sum(axis=-1, keepdims=True)
         self.log_Ps = np.log(P)
@@ -108,13 +110,14 @@ class StickyTransitions(StationaryTransitions):
 
     pi_k ~ Dir(alpha + kappa * e_k)
     """
-    def __init__(self, K, D, M=0, alpha=1, kappa=100):
-        super(StickyTransitions, self).__init__(K, D, M=M)
+    def __init__(self, num_states, observation_dim, input_dim=0, alpha=1, kappa=100):
+        super(StickyTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim)
         self.alpha = alpha
         self.kappa = kappa
 
     def log_prior(self):
-        K = self.K
+        K = self.num_states
         Ps = np.exp(self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True))
 
         lp = 0
@@ -123,9 +126,9 @@ class StickyTransitions(StationaryTransitions):
             lp += dirichlet.logpdf(Ps[k], alpha)
         return lp
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+    def m_step(self, expectations, dataset, **kwargs):
         expected_joints = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-8
-        expected_joints += self.kappa * np.eye(self.K)
+        expected_joints += self.kappa * np.eye(self.num_states)
         P = expected_joints / expected_joints.sum(axis=1, keepdims=True)
         self.log_Ps = np.log(P)
 
@@ -136,11 +139,13 @@ class InputDrivenTransitions(StickyTransitions):
     determined by a generalized linear model applied to the
     exogenous input.
     """
-    def __init__(self, K, D, M, alpha=1, kappa=0):
-        super(InputDrivenTransitions, self).__init__(K, D, M=M, alpha=alpha, kappa=kappa)
+    def __init__(self, num_states, observation_dim, input_dim=0, alpha=1, kappa=0):
+        super(InputDrivenTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim,
+                     alpha=alpha, kappa=kappa)
 
         # Parameters linking input to state distribution
-        self.Ws = npr.randn(K, M)
+        self.Ws = npr.randn(num_states, input_dim)
 
     @property
     def params(self):
@@ -157,28 +162,32 @@ class InputDrivenTransitions(StickyTransitions):
         self.log_Ps = self.log_Ps[np.ix_(perm, perm)]
         self.Ws = self.Ws[perm]
 
-    def log_transition_matrices(self, data, input, mask, tag):
-        T = data.shape[0]
-        assert input.shape[0] == T
+    def log_transition_matrices(self, data):
+        T = data['data'].shape[0]
+        inpt = data['input']
+        assert inpt.shape == (T, self.input_dim)
+
         # Previous state effect
         log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
-        log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
+        log_Ps = log_Ps + np.dot(inpt[1:], self.Ws.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        _Transitions.m_step(self, expectations, datas, inputs, masks, tags, **kwargs)
+    def m_step(self, expectations, dataset, **kwargs):
+        _Transitions.m_step(self, expectations, dataset, **kwargs)
 
 
 class RecurrentTransitions(InputDrivenTransitions):
     """
     Generalization of the input driven HMM in which the observations serve as future inputs
     """
-    def __init__(self, K, D, M=0, alpha=1, kappa=0):
-        super(RecurrentTransitions, self).__init__(K, D, M, alpha=alpha, kappa=kappa)
+    def __init__(self, num_states, observation_dim, input_dim=0, alpha=1, kappa=0):
+        super(RecurrentTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim,
+                     alpha=alpha, kappa=kappa)
 
         # Parameters linking past observations to state distribution
-        self.Rs = np.zeros((K, D))
+        self.Rs = np.zeros((num_states, observation_dim))
 
     @property
     def params(self):
@@ -196,18 +205,21 @@ class RecurrentTransitions(InputDrivenTransitions):
         super(RecurrentTransitions, self).permute(perm)
         self.Rs = self.Rs[perm]
 
-    def log_transition_matrices(self, data, input, mask, tag):
+    def log_transition_matrices(self, data):
+        obs = data['data']
+        inpt = data['input']
         T, D = data.shape
+
         # Previous state effect
         log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
-        log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
+        log_Ps = log_Ps + np.dot(inpt[1:], self.Ws.T)[:, None, :]
         # Past observations effect
-        log_Ps = log_Ps + np.dot(data[:-1], self.Rs.T)[:, None, :]
+        log_Ps = log_Ps + np.dot(obs[:-1], self.Rs.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        _Transitions.m_step(self, expectations, datas, inputs, masks, tags, **kwargs)
+    def m_step(self, expectations, dataset, **kwargs):
+        _Transitions.m_step(self, expectations, dataset, **kwargs)
 
 
 class RecurrentOnlyTransitions(_Transitions):
@@ -216,13 +228,14 @@ class RecurrentOnlyTransitions(_Transitions):
     next state.  Get rid of the transition matrix and replace it
     with a constant bias r.
     """
-    def __init__(self, K, D, M=0):
-        super(RecurrentOnlyTransitions, self).__init__(K, D, M)
+    def __init__(self, num_states, observation_dim, input_dim=0):
+        super(RecurrentOnlyTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim)
 
         # Parameters linking past observations to state distribution
-        self.Ws = npr.randn(K, M)
-        self.Rs = npr.randn(K, D)
-        self.r = npr.randn(K)
+        self.Ws = npr.randn(num_states, input_dim)
+        self.Rs = npr.randn(num_states, observation_dim)
+        self.r = npr.randn(num_states)
 
     @property
     def params(self):
@@ -240,16 +253,19 @@ class RecurrentOnlyTransitions(_Transitions):
         self.Rs = self.Rs[perm]
         self.r = self.r[perm]
 
-    def log_transition_matrices(self, data, input, mask, tag):
+    def log_transition_matrices(self, data):
+        obs = data['data']
+        inpt = data['input']
         T, D = data.shape
-        log_Ps = np.dot(input[1:], self.Ws.T)[:, None, :]              # inputs
-        log_Ps = log_Ps + np.dot(data[:-1], self.Rs.T)[:, None, :]     # past observations
-        log_Ps = log_Ps + self.r                                       # bias
-        log_Ps = np.tile(log_Ps, (1, self.K, 1))                       # expand
-        return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)       # normalize
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        _Transitions.m_step(self, expectations, datas, inputs, masks, tags, **kwargs)
+        log_Ps = np.dot(inpt[1:], self.Ws.T)[:, None, :]              # inputs
+        log_Ps = log_Ps + np.dot(obs[:-1], self.Rs.T)[:, None, :]     # past observations
+        log_Ps = log_Ps + self.r                                      # bias
+        log_Ps = np.tile(log_Ps, (1, self.num_states, 1))             # expand
+        return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)      # normalize
+
+    def m_step(self, expectations, dataset, **kwargs):
+        _Transitions.m_step(self, expectations, dataset, **kwargs)
 
 
 class RBFRecurrentTransitions(InputDrivenTransitions):
@@ -275,12 +291,14 @@ class RBFRecurrentTransitions(InputDrivenTransitions):
     While we're at it, there's no harm in adding a linear term to the log
     transition matrices to capture input dependencies.
     """
-    def __init__(self, K, D, M=0, alpha=1, kappa=0):
-        super(RBFRecurrentTransitions, self).__init__(K, D, M=M, alpha=alpha, kappa=kappa)
+    def __init__(self, num_states, observation_dim, input_dim=0, alpha=1, kappa=0):
+        super(RBFRecurrentTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim,
+                     alpha=alpha, kappa=kappa)
 
         # RBF parameters
-        self.mus = npr.randn(K, D)
-        self._sqrt_Sigmas = npr.randn(K, D, D)
+        self.mus = npr.randn(num_states, observation_dim)
+        self._sqrt_Sigmas = npr.randn(num_states, observation_dim, observation_dim)
 
     @property
     def params(self):
@@ -294,11 +312,11 @@ class RBFRecurrentTransitions(InputDrivenTransitions):
     def Sigmas(self):
         return np.matmul(self._sqrt_Sigmas, np.swapaxes(self._sqrt_Sigmas, -1, -2))
 
-    def initialize(self, datas, inputs, masks, tags):
+    def initialize(self, dataset):
         # Fit a GMM to the data to set the means and covariances
         from sklearn.mixture import GaussianMixture
-        gmm = GaussianMixture(self.K, covariance_type="full")
-        gmm.fit(np.vstack(datas))
+        gmm = GaussianMixture(self.num_states, covariance_type="full")
+        gmm.fit(np.vstack([data['data'] for data in dataset]))
         self.mus = gmm.means_
         self._sqrt_Sigmas = np.linalg.cholesky(gmm.covariances_)
 
@@ -311,40 +329,44 @@ class RBFRecurrentTransitions(InputDrivenTransitions):
         self.sqrt_Sigmas = self.sqrt_Sigmas[perm]
         self.Ws = self.Ws[perm]
 
-    def log_transition_matrices(self, data, input, mask, tag):
+    def log_transition_matrices(self, data):
+        obs = data['data']
+        inpt = data['input']
+        mask = data['mask']
         assert np.all(mask), "Recurrent models require that all data are present."
-
-        T = data.shape[0]
-        assert input.shape[0] == T
-        K, D = self.K, self.D
+        T = obs.shape[0]
+        assert inpt.shape == (T, self.input_dim)
+        K, D = self.num_states, self.observation_dim
 
         # Previous state effect
         log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
 
         # RBF recurrent function
-        rbf = multivariate_normal_logpdf(data[:-1, None, :], self.mus, self.Sigmas)
+        rbf = multivariate_normal_logpdf(obs[:-1, None, :], self.mus, self.Sigmas)
         log_Ps = log_Ps + rbf[:, None, :]
 
         # Input effect
-        log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
+        log_Ps = log_Ps + np.dot(inpt[1:], self.Ws.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        _Transitions.m_step(self, expectations, datas, inputs, masks, tags, **kwargs)
+    def m_step(self, expectations, dataset, **kwargs):
+        _Transitions.m_step(self, expectations, dataset, **kwargs)
 
 
 # Allow general nonlinear emission models with neural networks
 class NeuralNetworkRecurrentTransitions(_Transitions):
-    def __init__(self, K, D, M=0, hidden_layer_sizes=(50,), nonlinearity="relu"):
-        super(NeuralNetworkRecurrentTransitions, self).__init__(K, D, M=M)
+    def __init__(self, num_states, observation_dim, input_dim=0,
+                 hidden_layer_sizes=(50,), nonlinearity="relu"):
+        super(NeuralNetworkRecurrentTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim)
 
         # Baseline transition probabilities
-        Ps = .95 * np.eye(K) + .05 * npr.rand(K, K)
+        Ps = .95 * np.eye(num_states) + .05 * npr.rand(num_states, num_states)
         Ps /= Ps.sum(axis=1, keepdims=True)
         self.log_Ps = np.log(Ps)
 
         # Initialize the NN weights
-        layer_sizes = (D + M,) + hidden_layer_sizes + (K,)
+        layer_sizes = (observation_dim + input_dim,) + hidden_layer_sizes + (num_states,)
         self.weights = [npr.randn(m, n) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])]
         self.biases = [npr.randn(n) for n in layer_sizes[1:]]
 
@@ -367,9 +389,9 @@ class NeuralNetworkRecurrentTransitions(_Transitions):
         self.weights[-1] = self.weights[-1][:,perm]
         self.biases[-1] = self.biases[-1][perm]
 
-    def log_transition_matrices(self, data, input, mask, tag):
+    def log_transition_matrices(self, data):
         # Pass the data and inputs through the neural network
-        x = np.hstack((data[:-1], input[1:]))
+        x = np.hstack((data['data'][:-1], data['input'][1:]))
         for W, b in zip(self.weights, self.biases):
             y = np.dot(x, W) + b
             x = self.nonlinearity(y)
@@ -380,10 +402,10 @@ class NeuralNetworkRecurrentTransitions(_Transitions):
         # Normalize
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
-    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=100, **kwargs):
+    def m_step(self, expectations, dataset, optimizer="adam", num_iters=100, **kwargs):
         # Default to adam instead of bfgs for the neural network model.
-        _Transitions.m_step(self, expectations, datas, inputs, masks, tags,
-            optimizer=optimizer, num_iters=num_iters, **kwargs)
+        _Transitions.m_step(self, expectations, dataset,
+                            optimizer=optimizer, num_iters=num_iters, **kwargs)
 
 
 class NegativeBinomialSemiMarkovTransitions(_Transitions):
@@ -438,21 +460,20 @@ class NegativeBinomialSemiMarkovTransitions(_Transitions):
 
     where we used the geometric series and the fact that \sum_{j != k} P[k, j] = 1.
     """
-    def __init__(self, K, D, M=0, r_min=1, r_max=20):
-        assert K > 1, "Explicit duration models only work if num states > 1."
-        super(NegativeBinomialSemiMarkovTransitions, self).__init__(K, D, M=M)
+    def __init__(self, num_states, observation_dim, input_dim=0, r_min=1, r_max=20):
+        assert num_states > 1, "Explicit duration models only work if num states > 1."
+        super(NegativeBinomialSemiMarkovTransitions, self).\
+            __init__(num_states, observation_dim, input_dim=input_dim)
 
         # Initialize the super state transition probabilities
-        self.Ps = npr.rand(K, K)
+        self.Ps = npr.rand(num_states, num_states)
         np.fill_diagonal(self.Ps, 0)
         self.Ps /= self.Ps.sum(axis=1, keepdims=True)
 
         # Initialize the negative binomial duration probabilities
         self.r_min, self.r_max = r_min, r_max
-        self.rs = npr.randint(r_min, r_max + 1, size=K)
-        # self.rs = np.ones(K, dtype=int)
-        # self.ps = npr.rand(K)
-        self.ps = 0.5 * np.ones(K)
+        self.rs = npr.randint(r_min, r_max + 1, size=num_states)
+        self.ps = 0.5 * np.ones(num_states)
 
         # Initialize the transition matrix
         self._transition_matrix = None
@@ -464,13 +485,13 @@ class NegativeBinomialSemiMarkovTransitions(_Transitions):
     @params.setter
     def params(self, value):
         Ps, rs, ps = value
-        assert Ps.shape == (self.K, self.K)
+        assert Ps.shape == (self.num_states, self.num_states)
         assert np.allclose(np.diag(Ps), 0)
         assert np.allclose(Ps.sum(1), 1)
-        assert rs.shape == (self.K)
+        assert rs.shape == (self.num_states)
         assert rs.dtype == int
         assert np.all(rs > 0)
-        assert ps.shape == (self.K)
+        assert ps.shape == (self.num_states)
         assert np.all(ps > 0)
         assert np.all(ps < 1)
         self.Ps, self.rs, self.ps = Ps, rs, ps
@@ -495,7 +516,7 @@ class NegativeBinomialSemiMarkovTransitions(_Transitions):
 
     @property
     def state_map(self):
-        return np.repeat(np.arange(self.K), self.rs)
+        return np.repeat(np.arange(self.num_states), self.rs)
 
     @property
     def transition_matrix(self):
@@ -532,12 +553,12 @@ class NegativeBinomialSemiMarkovTransitions(_Transitions):
 
         return P
 
-    def log_transition_matrices(self, data, input, mask, tag):
-        T = data.shape[0]
+    def log_transition_matrices(self, data):
+        T = data['data'].shape[0]
         P = self.transition_matrix
         return np.tile(np.log(P)[None, :, :], (T-1, 1, 1))
 
-    def m_step(self, expectations, datas, inputs, masks, tags, samples, **kwargs):
+    def m_step(self, expectations, dataset, samples, **kwargs):
         # Update the transition matrix between super states
         P = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-16
         np.fill_diagonal(P, 0)
@@ -546,10 +567,9 @@ class NegativeBinomialSemiMarkovTransitions(_Transitions):
 
         # Fit negative binomial models for each duration based on sampled states
         states, durations = map(np.concatenate, zip(*[rle(z_smpl) for z_smpl in samples]))
-        for k in range(self.K):
+        for k in range(self.num_states):
             self.rs[k], self.ps[k] = \
                 fit_negative_binomial_integer_r(durations[states == k], self.r_min, self.r_max)
 
         # Reset the transition matrix
         self._transition_matrix = None
-

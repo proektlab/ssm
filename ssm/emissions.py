@@ -2,16 +2,19 @@ import autograd.numpy as np
 import autograd.numpy.random as npr
 from autograd.scipy.special import gammaln
 
-from ssm.util import ensure_args_are_lists, \
-    logistic, logit, softplus, inv_softplus
+from ssm.util import check_dataset, logistic, logit, softplus, inv_softplus
 from ssm.preprocessing import interpolate_data, pca_with_imputation
 
 
 # Observation models for SLDS
 class _Emissions(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True):
-        self.N, self.K, self.D, self.M, self.single_subspace = \
-            N, K, D, M, single_subspace
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True):
+        self.observation_dim = observation_dim
+        self.num_states = num_states
+        self.latent_dim = latent_dim
+        self.input_dim = input_dim
+        self.single_subspace = single_subspace
 
     @property
     def params(self):
@@ -24,8 +27,8 @@ class _Emissions(object):
     def permute(self, perm):
         pass
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None, num_em_iters=25):
+    @check_dataset
+    def initialize(self, dataset, num_em_iters=25):
         pass
 
     def initialize_from_arhmm(self, arhmm, pca):
@@ -34,19 +37,19 @@ class _Emissions(object):
     def log_prior(self):
         return 0
 
-    def log_likelihoods(self, data, input, mask, tag, x):
+    def log_likelihoods(self, data, latent_state):
         raise NotImplementedError
 
-    def forward(self, x, input=None, tag=None):
+    def forward(self, latent_state, covariates):
         raise NotImplemented
 
-    def invert(self, data, input=None, mask=None, tag=None):
+    def invert(self, data):
         raise NotImplemented
 
     def sample(self, z, x, input=None, tag=None):
         raise NotImplementedError
 
-    def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
+    def smooth(self, expected_states, variational_mean, data):
         """
         Compute the mean observation under the posterior distribution
         of latent discrete states.
@@ -64,11 +67,18 @@ class _LinearEmissions(_Emissions):
     where C is an emission matrix, d is a bias, F an input matrix,
     and u is an input.
     """
-    def __init__(self, N, K, D, M=0, single_subspace=True):
-        super(_LinearEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True):
+        super(_LinearEmissions, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         # Initialize linear layer.  Set _Cs to be private so that it can be
         # changed in subclasses.
+        N = observation_dim
+        K = num_states
+        D = latent_dim
+        M = input_dim
         self._Cs = npr.randn(1, N, D) if single_subspace else npr.randn(K, N, D)
         self.Fs = npr.randn(1, N, M) if single_subspace else npr.randn(K, N, M)
         self.ds = npr.randn(1, N) if single_subspace else npr.randn(K, N)
@@ -79,6 +89,9 @@ class _LinearEmissions(_Emissions):
 
     @Cs.setter
     def Cs(self, value):
+        N = self.observation_dim
+        K = self.num_states
+        D = self.latent_dim
         assert value.shape == (1, N, D) if self.single_subspace else (K, N, D)
         self._Cs = value
 
@@ -96,7 +109,7 @@ class _LinearEmissions(_Emissions):
             self.Fs = self.Fs[perm]
             self.ds = self.ds[perm]
 
-    def _invert(self, data, input=None, mask=None, tag=None):
+    def _invert(self, data):
         """
         Approximate invert the linear emission model with the pseudoinverse
 
@@ -123,14 +136,14 @@ class _LinearEmissions(_Emissions):
         # Project data to get the mean
         return (data - bias).dot(C_pseudoinv)
 
-    def forward(self, x, input, tag):
+    def forward(self, latent_state, covariates):
         return np.matmul(self.Cs[None, ...], x[:, None, :, None])[:, :, :, 0] \
              + np.matmul(self.Fs[None, ...], input[:, None, :, None])[:, :, :, 0] \
              + self.ds
 
-    @ensure_args_are_lists
-    def _initialize_with_pca(self, datas, inputs=None, masks=None, tags=None, num_iters=20):
-        Keff = 1 if self.single_subspace else self.K
+    @check_dataset
+    def _initialize_with_pca(self, dataset, num_iters=20):
+        Keff = 1 if self.single_subspace else self.num_states
 
         # First solve a linear regression for data given input
         if self.M > 0:
@@ -140,10 +153,16 @@ class _LinearEmissions(_Emissions):
             self.Fs = np.tile(lr.coef_[None, :, :], (Keff, 1, 1))
 
         # Compute residual after accounting for input
-        resids = [data - np.dot(input, self.Fs[0].T) for data, input in zip(datas, inputs)]
+        residuals = []
+        for data in dataset:
+            residuals.append(data['data'] - np.dot(data['input'], self.Fs[0].T))
+
+        # Extract masks
+        masks = [data['mask'] for data in dataset]
 
         # Run PCA to get a linear embedding of the data
-        pca, xs, ll = pca_with_imputation(self.D, resids, masks, num_iters=num_iters)
+        pca, latent_states, ll = pca_with_imputation(
+            self.observation_dim, residuals, masks, num_iters=num_iters)
 
         self.Cs = np.tile(pca.components_.T[None, :, :], (Keff, 1, 1))
         self.ds = np.tile(pca.mean_[None, :], (Keff, 1))
@@ -159,8 +178,11 @@ class _OrthogonalLinearEmissions(_LinearEmissions):
     https://pubs.acs.org/doi/pdf/10.1021/acs.jpca.5b02015
     for a derivation of the rational Cayley transform.
     """
-    def __init__(self, N, K, D, M=0, single_subspace=True):
-        super(_OrthogonalLinearEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True):
+        super(_OrthogonalLinearEmissions, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         # Initialize linear layer
         assert N > D
@@ -229,8 +251,11 @@ class _OrthogonalLinearEmissions(_LinearEmissions):
 
 # Sometimes we just want a bit of additive noise on the observations
 class _IdentityEmissions(_Emissions):
-    def __init__(self, N, K, D, M=0, single_subspace=True):
-        super(_IdentityEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True):
+        super(_IdentityEmissions, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
         assert N == D
 
     def forward(self, x, input):
@@ -245,9 +270,12 @@ class _IdentityEmissions(_Emissions):
 
 # Allow general nonlinear emission models with neural networks
 class _NeuralNetworkEmissions(_Emissions):
-    def __init__(self, N, K, D, M=0, hidden_layer_sizes=(50,), single_subspace=True):
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, hidden_layer_sizes=(50,)):
         assert single_subspace, "_NeuralNetworkEmissions only supports `single_subspace=True`"
-        super(_NeuralNetworkEmissions, self).__init__(N, K, D, M=M, single_subspace=True)
+        super(_NeuralNetworkEmissions, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         # Initialize the neural network weights
         assert N > D
@@ -266,14 +294,14 @@ class _NeuralNetworkEmissions(_Emissions):
     def permute(self, perm):
         pass
 
-    def forward(self, x, input, tag):
-        inputs = np.column_stack((x, input))
+    def forward(self, latent_states, covariates):
+        inputs = np.column_stack((latent_states, covariates['input']))
         for W, b in zip(self.weights, self.biases):
             outputs = np.dot(inputs, W) + b
             inputs = np.tanh(outputs)
         return outputs[:, None, :]
 
-    def _invert(self, data, input=None, mask=None, tag=None):
+    def _invert(self, data):
         """
         Inverse is... who knows!
         """
@@ -282,8 +310,12 @@ class _NeuralNetworkEmissions(_Emissions):
 
 # Observation models for SLDS
 class _GaussianEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
-        super(_GaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, **kwargs):
+        super(_GaussianEmissionsMixin, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
+
         self.inv_etas = -4 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
 
     @property
@@ -300,7 +332,7 @@ class _GaussianEmissionsMixin(object):
         if not self.single_subspace:
             self.inv_etas = self.inv_etas[perm]
 
-    def log_likelihoods(self, data, input, mask, tag, x):
+    def log_likelihoods(self, data, x):
         mus = self.forward(x, input, tag)
         etas = np.exp(self.inv_etas)
         lls = -0.5 * np.log(2 * np.pi * etas) - 0.5 * (data[:, None, :] - mus)**2 / etas
@@ -316,15 +348,15 @@ class _GaussianEmissionsMixin(object):
         etas = np.exp(self.inv_etas)
         return mus[np.arange(T), z, :] + np.sqrt(etas[z]) * npr.randn(T, self.N)
 
-    def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
+    def smooth(self, expected_states, variational_mean, data):
         mus = self.forward(variational_mean, input, tag)
         return mus[:, 0, :] if self.single_subspace else np.sum(mus * expected_states[:,:,None], axis=1)
 
 
 class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
         self.inv_etas[:,...] = np.log(pca.noise_variance_)
@@ -332,8 +364,8 @@ class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
 
 class GaussianOrthogonalEmissions(_GaussianEmissionsMixin, _OrthogonalLinearEmissions):
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
         self.inv_etas[:,...] = np.log(pca.noise_variance_)
@@ -348,8 +380,11 @@ class GaussianNeuralNetworkEmissions(_GaussianEmissionsMixin, _NeuralNetworkEmis
 
 
 class _StudentsTEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
-        super(_StudentsTEmissionsMixin, self).__init__(N, K, D, M, single_subspace=single_subspace, **kwargs)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, **kwargs):
+        super(_StudentsTEmissionsMixin, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
         self.inv_etas = -4 + npr.randn(1, N) if single_subspace else npr.randn(K, N)
         self.inv_nus = np.log(4) * np.ones(1, N) if single_subspace else np.log(4) * np.ones(K, N)
 
@@ -367,7 +402,7 @@ class _StudentsTEmissionsMixin(object):
             self.inv_etas = self.inv_etas[perm]
             self.inv_nus = self.inv_nus[perm]
 
-    def log_likelihoods(self, data, input, mask, tag, x):
+    def log_likelihoods(self, data, x):
         N, etas, nus = self.N, np.exp(self.inv_etas), np.exp(self.inv_nus)
         mus = self.forward(x, input, tag)
 
@@ -377,26 +412,27 @@ class _StudentsTEmissionsMixin(object):
             gammaln((nus + N) / 2.0) - gammaln(nus / 2.0) - N / 2.0 * np.log(nus) \
             -N / 2.0 * np.log(np.pi) - 0.5 * np.sum(np.log(etas), axis=1)
 
-    def invert(self, data, input=None, mask=None, tag=None):
-        return self._invert(data, input=input, mask=mask, tag=tag)
+    def invert(self, data):
+        return self._invert(data)
 
     def sample(self, z, x, input=None, tag=None):
         T = z.shape[0]
         z = np.zeros_like(z, dtype=int) if self.single_subspace else z
         mus = self.forward(x, input, tag)
         etas = np.exp(self.inv_etas)
+        nus = np.exp(self.nus)
         taus = npr.gamma(nus[z] / 2.0, 2.0 / nus[z])
         return mus[np.arange(T), z, :] + np.sqrt(etas[z] / taus) * npr.randn(T, self.N)
 
-    def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
+    def smooth(self, expected_states, variational_mean, data):
         mus = self.forward(variational_mean, input, tag)
         return mus[:,0,:] if self.single_subspace else np.sum(mus * expected_states[:,:,None], axis=1)
 
 
 class StudentsTEmissions(_StudentsTEmissionsMixin, _LinearEmissions):
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
         self.inv_etas[:,...] = np.log(pca.noise_variance_)
@@ -404,8 +440,8 @@ class StudentsTEmissions(_StudentsTEmissionsMixin, _LinearEmissions):
 
 class StudentsTOrthogonalEmissions(_StudentsTEmissionsMixin, _OrthogonalLinearEmissions):
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         pca = self._initialize_with_pca(datas, inputs=inputs, masks=masks, tags=tags)
         self.inv_etas[:,...] = np.log(pca.noise_variance_)
@@ -420,8 +456,11 @@ class StudentsTNeuralNetworkEmissions(_StudentsTEmissionsMixin, _NeuralNetworkEm
 
 
 class _BernoulliEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, link="logit", **kwargs):
-        super(BernoulliEmissions, self).__init__(N, K, D, M, single_subspace=single_subspace, **kwargs)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, link="logit", **kwargs):
+        super(_BernoulliEmissionsMixin, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         mean_functions = dict(
             logit=logistic
@@ -456,16 +495,16 @@ class _BernoulliEmissionsMixin(object):
 
 
 class BernoulliEmissions(_BernoulliEmissionsMixin, _LinearEmissions):
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         yhats = [self.link(np.clip(d, .1, .9)) for d in datas]
         self._initialize_with_pca(logits, inputs=inputs, masks=masks, tags=tags)
 
 
 class BernoulliOrthogonalEmissions(_BernoulliEmissionsMixin, _OrthogonalLinearEmissions):
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         yhats = [self.link(np.clip(d, .1, .9)) for d in datas]
         self._initialize_with_pca(logits, inputs=inputs, masks=masks, tags=tags)
@@ -480,8 +519,11 @@ class BernoulliNeuralNetworkEmissions(_BernoulliEmissionsMixin, _NeuralNetworkEm
 
 
 class _PoissonEmissionsMixin(object):
-    def __init__(self, N, K, D, M=0, single_subspace=True, link="log", **kwargs):
-        super(_PoissonEmissionsMixin, self).__init__(N, K, D, M, single_subspace=single_subspace, **kwargs)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, link="log", **kwargs):
+        super(_PoissonEmissionsMixin, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         mean_functions = dict(
             log=lambda x: np.exp(x),
@@ -495,14 +537,13 @@ class _PoissonEmissionsMixin(object):
             )
         self.link = link_functions[link]
 
-    def log_likelihoods(self, data, input, mask, tag, x):
+    def log_likelihoods(self, data, latent_states):
         assert data.dtype == int
-        lambdas = self.mean(self.forward(x, input, tag))
-        mask = np.ones_like(data, dtype=bool) if mask is None else mask
+        lambdas = self.mean(self.forward(latent_states, data))
         lls = -gammaln(data[:,None,:] + 1) -lambdas + data[:,None,:] * np.log(lambdas)
-        return np.sum(lls * mask[:, None, :], axis=2)
+        return np.sum(lls * data['mask'][:, None, :], axis=2)
 
-    def invert(self, data, input=None, mask=None, tag=None):
+    def invert(self, data):
         yhat = self.link(np.clip(data, .1, np.inf))
         return self._invert(yhat, input=input, mask=mask, tag=tag)
 
@@ -513,22 +554,22 @@ class _PoissonEmissionsMixin(object):
         y = npr.poisson(lambdas[np.arange(T), z, :])
         return y
 
-    def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
+    def smooth(self, expected_states, variational_mean, data):
         lambdas = self.mean(self.forward(variational_mean, input, tag))
         return lambdas[:,0,:] if self.single_subspace else np.sum(lambdas * expected_states[:,:,None], axis=1)
 
 
 class PoissonEmissions(_PoissonEmissionsMixin, _LinearEmissions):
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         yhats = [self.link(np.clip(d, .1, np.inf)) for d in datas]
         self._initialize_with_pca(yhats, inputs=inputs, masks=masks, tags=tags)
 
 
 class PoissonOrthogonalEmissions(_PoissonEmissionsMixin, _OrthogonalLinearEmissions):
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    @check_dataset
+    def initialize(self, dataset):
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
         yhats = [self.link(np.clip(d, .1, np.inf)) for d in datas]
         self._initialize_with_pca(yhats, inputs=inputs, masks=masks, tags=tags)
@@ -547,8 +588,11 @@ class _AutoRegressiveEmissionsMixin(object):
     Include past observations as a covariate in the SLDS emissions.
     The AR model is restricted to be diagonal.
     """
-    def __init__(self, N, K, D, M=0, single_subspace=True, **kwargs):
-        super(_AutoRegressiveEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
+    def __init__(self, observation_dim, num_states, latent_dim,
+                 input_dim=0, single_subspace=True, **kwargs):
+        super(_AutoRegressiveEmissionsMixin, self).\
+            __init__(observation_dim, num_states, latent_dim,
+                     input_dim=input_dim, single_subspace=single_subspace)
 
         # Initialize AR component of the model
         self.As = npr.randn(1, N) if single_subspace else npr.randn(K, N)
@@ -602,8 +646,8 @@ class _AutoRegressiveEmissionsMixin(object):
 
 
 class AutoRegressiveEmissions(_AutoRegressiveEmissionsMixin, _LinearEmissions):
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None, num_em_iters=25):
+    @check_dataset
+    def initialize(self, dataset, num_em_iters=25):
         # Initialize the subspace with PCA
         from sklearn.decomposition import PCA
         datas = [interpolate_data(data, mask) for data, mask in zip(datas, masks)]
