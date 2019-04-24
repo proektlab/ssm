@@ -467,3 +467,161 @@ def lds_mean(As, bs, Qi_sqrts, ms, Ri_sqrts):
 
     return solveh_banded(J_banded, h.ravel(), lower=True).reshape((T, D))
 
+
+# Rao-Blackwellized particle filter for recurrent SLDS
+def rbpf(data,
+         num_discrete_states,
+         continuous_state_dim,
+         data_dim,
+         sample_initial_dist,
+         transition_probs,
+         dynamics_prob,
+         sample_dynamics,
+         emissions_prob,
+         num_particles=1):
+    """
+    Sample the continuous latent states of a switching LDS using
+    Rao-Blackwellized particle filtering, as described above.
+    """
+
+    from tqdm.auto import trange
+
+    # Check the data dimensions
+    assert data.ndim == 2 and data.shape[1] == data_dim
+    T = data.shape[0]
+
+    # Initialize the particle filter arrays
+    weights = np.zeros((T, num_particles))
+    alphas = 1 / num_discrete_states * np.ones((num_particles, num_discrete_states))
+    particles = np.zeros((T, num_particles, continuous_state_dim))
+    parents = -1 * np.ones((T, num_particles), dtype=int)
+
+    # Initialization. Sample x_0^p ~ p(x_0) for p=1, ..., num_particles.
+    for p in range(num_particles):
+        particles[0, p] = xpt = sample_initial_dist()
+        weights[0, p] = emissions_prob(xpt, data[0])
+
+    # Run the particle filter
+    for t in trange(1, T):
+        for p in range(num_particles):
+
+            # 1. Sample parents according to importance weights.
+            #    This is the resampling step.
+            parents[t, p] = npr.choice(num_particles,
+                                       p=weights[t-1] / weights[t-1].sum())
+
+            # 2a. Sample x_t^p ~ p(x_t | x_{t-1}^p) for p = 1, ..., num_particles
+            xptm1 = particles[t-1, parents[t, p]]
+            zptm1 = npr.choice(num_discrete_states, p=alphas[parents[t, p]])
+            zpt = npr.choice(num_discrete_states, p=transition_probs(zptm1, xptm1))
+            particles[t, p] = xpt = sample_dynamics(zpt, xptm1)
+
+            # 2b. Run one step of message passing to sum out the discrete states
+            tmp = np.zeros(num_discrete_states)
+            for zptm1 in range(num_discrete_states):
+                tmp += alphas[parents[t, p], zptm1] * transition_probs(zptm1, xptm1)
+            for zpt in range(num_discrete_states):
+                tmp[zpt] *= dynamics_prob(zpt, xptm1, xpt)
+            alphas[p] = tmp / tmp.sum()
+
+            # 3. Evaluate the importance weights. With the bootstrap filter,
+            #    these are just the emission probabilities.
+            weights[t, p] = emissions_prob(xpt, data[t])
+
+    # Reconstuct the trajectories from particles and parents
+    trajectories = np.zeros((T, num_particles, continuous_state_dim))
+    trajectories[T-1] = particles[T-1]
+    for p in range(num_particles):
+        a = parents[T-1, p]
+        for t in range(T-2, -1, -1):
+            trajectories[t, p] = particles[t, a]
+            a = parents[t, a]
+
+    return trajectories, particles, parents, weights, alphas
+
+
+def sample_discrete(ps):
+    """
+    ps is an array of NxK that is nonnegative and sums to 1 over the K axis.
+    Return a length N array of ints in {0, ..., K-1} corresponding to samples
+    from each of the p distributions.
+    """
+    assert ps.ndim == 2
+    N, K = ps.shape
+    cdf = np.cumsum(ps, axis=1)
+    assert np.allclose(cdf[:, -1], 1)
+    u = npr.rand(N, 1)
+    smpl = np.sum(u >= cdf, axis=1)
+    assert np.all(smpl >= 0) and np.all(smpl < K)
+    return smpl
+
+def rbpfvec(data,
+            num_discrete_states,
+            continuous_state_dim,
+            data_dim,
+            sample_initial_dist,
+            transition_probs,
+            dynamics_prob,
+            sample_dynamics,
+            emissions_prob,
+            num_particles=10):
+    """
+    Sample the continuous latent states of a switching LDS using
+    Rao-Blackwellized particle filtering, as described above.
+    """
+    from tqdm.auto import trange
+
+    # Check the data dimensions
+    assert data.ndim == 2 and data.shape[1] == data_dim
+    T = data.shape[0]
+
+    # Initialize the particle filter arrays
+    weights = np.zeros((T, num_particles))
+    alphas = np.zeros((T, num_particles, num_discrete_states))
+    particles = np.zeros((T, num_particles, continuous_state_dim))
+    parents = -1 * np.ones((T, num_particles), dtype=int)
+
+    # Initialization. Sample x_0^p ~ p(x_0) for p=1, ..., num_particles.
+    alphas[0] = 1 / num_discrete_states
+    particles[0] = sample_initial_dist(size=num_particles)
+    weights[0] = emissions_prob(particles[0], data[0])
+
+    # Run the particle filter
+    for t in trange(1, T):
+        # 1. Sample parents according to importance weights.
+        #    This is the resampling step.
+        parents[t] = \
+            npr.choice(num_particles,
+                       p=weights[t-1] / weights[t-1].sum(),
+                       size=num_particles)
+
+        # 2a. Sample x_t^p ~ p(x_t | x_{t-1}^p) for p = 1, ..., num_particles
+        xtm1 = particles[t-1, parents[t]]
+        ztm1 = sample_discrete(alphas[t-1, parents[t]])
+        zt = sample_discrete(transition_probs(ztm1, xtm1))
+        particles[t] = xt = sample_dynamics(zt, xtm1)
+
+        # 2b. Run one step of message passing to sum out the discrete states
+        alphas[t] = 0
+        for ztm1 in range(num_discrete_states):
+            alphas[t] += alphas[t-1, parents[t], ztm1][:, None] * transition_probs(ztm1, xtm1)[None, :]
+        for zt in range(num_discrete_states):
+            alphas[t, :, zt] *= dynamics_prob(zt, xtm1, xt)
+        alphas[t] = alphas[t] / alphas[t].sum(axis=-1, keepdims=True)
+
+        # 3. Evaluate the importance weights. With the bootstrap filter,
+        #    these are just the emission probabilities.
+        weights[t] = emissions_prob(xt, data[t])
+
+    # Reconstuct the trajectories from particles and parents
+    trajectories = np.zeros((T, num_particles, continuous_state_dim))
+    states = np.zeros((T, num_particles, num_discrete_states))
+    trajectories[T-1] = particles[T-1]
+    states[T-1] = alphas[T-1]
+    curr_parents = parents[T-1]
+    for t in range(T-2, -1, -1):
+        trajectories[t] = particles[t, curr_parents]
+        states[t] = alphas[t, curr_parents]
+        curr_parents = parents[t, curr_parents]
+
+    return trajectories, states, particles, parents, weights, alphas
