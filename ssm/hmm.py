@@ -31,7 +31,8 @@ class HMM(object):
     In the code we will sometimes refer to the discrete
     latent state sequence as z and the data as x.
     """
-    def __init__(self, K, D, *, M=0, init_state_distn=None,
+    def __init__(self, K, D, *, M=0,
+                 init_state_distn=None,
                  transitions='standard',
                  transition_kwargs=None,
                  hierarchical_transition_tags=None,
@@ -115,7 +116,7 @@ class HMM(object):
         if not isinstance(observations, obs.Observations):
             raise TypeError("'observations' must be a subclass of"
                             " ssm.observations.Observations")
-        
+
         self.K, self.D, self.M = K, D, M
         self.init_state_distn = init_state_distn
         self.transitions = transitions
@@ -538,12 +539,12 @@ class HSMM(HMM):
             raise TypeError("'observations' must be a subclass of"
                             " ssm.observations.Observations")
 
-        super().__init__(K, D, M=M, transitions=transition_distn, 
+        super().__init__(K, D, M=M, transitions=transition_distn,
                         transition_kwargs=transition_kwargs,
                         observations=observation_distn,
                         observation_kwargs=observation_kwargs,
                         **kwargs)
-    
+
     @property
     def state_map(self):
         return self.transitions.state_map
@@ -769,3 +770,178 @@ class HSMM(HMM):
             self.initialize(datas, inputs=inputs, masks=masks, tags=tags)
 
         return _fitting_methods[method](datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
+
+
+class FactorialHMM(HMM):
+    """
+    Factorial hidden Markov model with F discrete state sequences (factors) evolving in parallel.
+    """
+    def __init__(self, num_states_per_factor, data_dim, input_dim=0,
+             init_state_distn=None,
+             transitions='standard',
+             transition_kwargs=None,
+             observations="gaussian", observation_kwargs=None):
+
+        # TODO: initialize a list of init_state_distns and transitions
+
+        @property
+    def params(self):
+        return [d.params for d in self.init_state_distns], \
+               [d.params for d in self.transition_distns], \
+               self.observations.params
+
+    @params.setter
+    def params(self, value):
+        for d, v in zip(self.init_state_distns, value[0]):
+            d.params = v
+
+        for d, v in zip(self.transition_distns, value[1]):
+            d.params = v
+
+        self.observations.params = value[2]
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        """
+        Initialize parameters given data.
+        """
+        # TODO: do we want to initialize all distns the same way?
+        for d in self.init_state_distns:
+            d.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+
+        for d in self.transition_distns:
+            d.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+
+        self.observations.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+
+    def permute(self, perm):
+        """
+        Permute the discrete latent states.
+        """
+        raise NotImplementedError()
+        # assert np.all(np.sort(perm) == np.arange(self.K))
+        # self.init_state_distn.permute(perm)
+        # self.transitions.permute(perm)
+        # self.observations.permute(perm)
+
+    def sample(self, T, prefix=None, input=None, tag=None, with_noise=True):
+        """
+        Sample synthetic data from the model. Optionally, condition on a given
+        prefix (preceding discrete states and data).
+
+        Parameters
+        ----------
+        T : int
+            number of time steps to sample
+
+        prefix : (zpre, xpre)
+            Optional prefix of discrete states (zpre) and continuous states (xpre)
+            zpre must be an array of integers taking values 0...num_states-1.
+            xpre must be an array of the same length that has preceding observations.
+
+        input : (T, input_dim) array_like
+            Optional inputs to specify for sampling
+
+        tag : object
+            Optional tag indicating which "type" of sampled data
+
+        with_noise : bool
+            Whether or not to sample data with noise.
+
+        Returns
+        -------
+        z_sample : array_like of type int
+            Sequence of sampled discrete states
+
+        x_sample : (T x observation_dim) array_like
+            Array of sampled data
+        """
+        raise NotImplementedError
+
+    @ensure_args_not_none
+    def expected_states(self, data, input=None, mask=None, tag=None):
+        # Compute the initial state distn and log transition matrix for each factor
+        log_pi0s = [d.log_initial_state_distn(data, input, mask, tag) for d in self.init_state_distns]
+        log_Ps = [d.log_transition_matrices(data, input, mask, tag) for d in self.transition_distns]
+
+        # Assume observations.log_likelihoods calculates the likelihood
+        # under each combination of discrete state assignments.  This
+        # exact calculation will be infeasible when the number of
+        # effective states is too large.
+        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+
+        # Call the message passing code with the potentials from each factor
+        # Note: the output is (scalar, TxK, and T-1xKxK) where K is the
+        # *total* number of states (product of Kf's)
+        return factorial_hmm_expected_states(log_pi0s, log_Ps, log_likes)
+
+    @ensure_args_not_none
+    def most_likely_states(self, data, input=None, mask=None, tag=None):
+        log_pi0s = [d.log_initial_state_distn(data, input, mask, tag) for d in self.init_state_distns]
+        log_Ps = [d.log_transition_matrices(data, input, mask, tag) for d in self.transition_distns]
+        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+        return factorial_viterbi(log_pi0s, log_Ps, log_likes)
+
+    @ensure_args_not_none
+    def filter(self, data, input=None, mask=None, tag=None):
+        log_pi0s = [d.log_initial_state_distn(data, input, mask, tag) for d in self.init_state_distns]
+        log_Ps = [d.log_transition_matrices(data, input, mask, tag) for d in self.transition_distns]
+        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+        return factorial_hmm_filter(log_pi0s, log_Ps, log_likes)
+
+    @ensure_args_not_none
+    def smooth(self, data, input=None, mask=None, tag=None):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        Ez, _, _ = self.expected_states(data, input, mask)
+        return self.observations.smooth(Ez, data, input, tag)
+
+    def log_prior(self):
+        """
+        Compute the log prior probability of the model parameters
+        """
+        return self.init_state_distn.log_prior() + \
+               self.transitions.log_prior() + \
+               self.observations.log_prior()
+
+    @ensure_args_are_lists
+    def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
+        """
+        Compute the log probability of the data under the current
+        model parameters.
+
+        :param datas: single array or list of arrays of data.
+        :return total log probability of the data.
+        """
+        ll = 0
+        for data, input, mask, tag in zip(datas, inputs, masks, tags):
+            log_pi0 = self.init_state_distn.log_initial_state_distn(data, input, mask, tag)
+            log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
+            log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+            ll += hmm_normalizer(log_pi0, log_Ps, log_likes)
+            assert np.isfinite(ll)
+        return ll
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -569,3 +569,60 @@ class NegativeBinomialSemiMarkovTransitions(Transitions):
         # Reset the transition matrix
         self._transition_matrix = None
 
+
+class StationaryFactorialTransitions(Transitions):
+    """
+    Factorial transition model with K_1, ..., K_F states
+    for each of the corresponding discrete factors.  The
+    total number of states is
+
+        K = \prod_f K_f
+
+    :param num_states_per_factor: a tuple of ints (K_1, ..., K_F)
+
+    """
+    def __init__(self, K, D, M=0, num_states_per_factor=None):
+        super(StationaryFactorialTransitions, self).__init__(K, D, M=M)
+
+        assert num_states_per_factor is not None
+        num_states_per_factor = np.asarray(num_states_per_factor, dtype=int)
+        assert np.prod(num_states_per_factor) == K, \
+            "The total number of states is the product of "
+            "num_states_per_factor.  This must equal K."
+
+        Ps_per_factor = [.95 * np.eye(Kf) + .05 * npr.rand(Kf, Kf)
+                         for Kf in num_states_per_factor]
+
+        for P in Ps_per_factor
+            P /= P.sum(axis=1, keepdims=True)
+
+        self.log_Ps = [np.log(P) for P in Ps_per_factor]
+
+    @property
+    def params(self):
+        return self.log_Ps
+
+    @params.setter
+    def params(self, value):
+        self.log_Ps = value
+
+    def permute(self, perm):
+        """
+        Permute the discrete latent states.
+        """
+        raise NotImplementedError("Permuting factorial transitions is not obvious.")
+
+    @property
+    def transition_matrix(self):
+        return np.exp(self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True))
+
+    def log_transition_matrices(self, data, input, mask, tag):
+        T = data.shape[0]
+        log_Ps = self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True)
+        # return np.tile(log_Ps[None, :, :], (T-1, 1, 1))
+        return log_Ps[None, :, :]
+
+    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        P = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-16
+        P /= P.sum(axis=-1, keepdims=True)
+        self.log_Ps = np.log(P)
