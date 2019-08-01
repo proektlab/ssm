@@ -1,0 +1,777 @@
+
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="utf-8" />
+    <title>SSM: Learning and Inference in State Space Models &#8212; SSM 0.0.1 documentation</title>
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <script type="text/javascript" src="_static/language_data.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="ssm-learning-and-inference-in-state-space-models">
+<h1>SSM: Learning and Inference in State Space Models<a class="headerlink" href="#ssm-learning-and-inference-in-state-space-models" title="Permalink to this headline">¶</a></h1>
+<p>State space models are probabilistic models for sequential data.  Hidden Markov models (HMM’s) are the canonical example: the observed data is modeled as a function of an underlying latent discrete state that randomly switches from one time-step to the next according to a transition matrix. Modern state space models have expanded on this basic formula in a variety of ways: by considering other types of latent states, more complex transitions and dynamics, and more sophisticated mappings between the latent state and the observed data.  Importantly, recent advances in artificial neural networks and deep learning have enabled us to capture highly nonlinear mappings and transition rules, which we can think of as learning an underlying data manifold and the dynamics on that manifold.  “Fitting” these models amounts to a) learning the parameters of the transitions and mappings, and b) inferring the latent states underlying the observed data.  These tools have countless applications in biological contexts, where many datasets come in the form of complex spatial and/or temporal sequences; e.g. genetic sequencing data, measurements of neural activity, videos of animal behavior, and many more.</p>
+<p>SSM instantiates these ideas in code according to a few key design principles:</p>
+<ol class="arabic simple">
+<li><p>_There is a logical distinction between the model and the inference algorithm. SSM should make it easy for scientists to iterate on the model (where they are domain experts) without having to worry about the inference algorithm._</p></li>
+</ol>
+<p>A model encapsulates parameters and determines the probability of the latent states and observed data; an inference algorithm outputs a posterior distribution of latent states given the observed data and the model parameters.  SSM makes this separation clear in code via different objects for models and posteriors.</p>
+<p>Since many inference algorithms only require first or second derivatives of the model probability, the model is designed to support automatic differentiation.  When a user needs to tweak a model for his or her particular scientific problem, they only need to specify how the probability is calculated.  Inference algorithms are generally harder to write, so the built-in algorithms should nearly always suffice.</p>
+<ol class="arabic simple" start="2">
+<li><p>_SSM should scale to very large datasets and capitalize on available hardware resources._</p></li>
+</ol>
+<p>We would like SSM to run seamlessly on either a desktop or a GPU/TPU cluster without much intervention from the user.  This is essential to science, since many users run exploratory analyses locally before running complete analyses of a full dataset, which typically requires a compute cluster. To accommodate these two use-cases, our algorithms must be parallelizable and our implementation must rely on computing libraries with broad hardware support.</p>
+<ol class="arabic simple" start="3">
+<li><p>_Classical models should “just work,” standard inference algorithms should be fast, and worked examples should illustrate best practices on real datasets._</p></li>
+</ol>
+<p>The vast majority of users do not need complicated tools; they need classical tools that work out of the box and don’t require a supercomputer.  SSM puts an emphasis on sensible defaults and intelligent initialization schemes.  Moreover, SSM has a fast library of low-level message passing routines, which form the core of many inference algorithms and make fitting standard models fast and efficient. Finally, SSM should have an array of worked examples, with real data, that illustrate how to use these tools responsibly and perform the proper checks and controls.</p>
+<div class="toctree-wrapper compound">
+</div>
+<span class="target" id="module-ssm.hmm"></span><dl class="class">
+<dt id="ssm.hmm.HMM">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.hmm.</code><code class="sig-name descname">HMM</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">init_state_distn=None</em>, <em class="sig-param">transitions='standard'</em>, <em class="sig-param">transition_kwargs=None</em>, <em class="sig-param">hierarchical_transition_tags=None</em>, <em class="sig-param">observations='gaussian'</em>, <em class="sig-param">observation_kwargs=None</em>, <em class="sig-param">hierarchical_observation_tags=None</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM" title="Permalink to this definition">¶</a></dt>
+<dd><p>Base class for hidden Markov models.</p>
+<p>Notation:
+K: number of discrete latent states
+D: dimensionality of observations
+M: dimensionality of inputs</p>
+<p>In the code we will sometimes refer to the discrete
+latent state sequence as z and the data as x.</p>
+<dl class="method">
+<dt id="ssm.hmm.HMM.expected_log_likelihood">
+<code class="sig-name descname">expected_log_likelihood</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs=None</em>, <em class="sig-param">masks=None</em>, <em class="sig-param">tags=None</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM.expected_log_likelihood" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute log-likelihood given current model parameters.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>datas</strong> – single array or list of arrays of data.</p>
+</dd>
+</dl>
+<p>:return total log probability of the data.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.hmm.HMM.expected_log_probability">
+<code class="sig-name descname">expected_log_probability</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs=None</em>, <em class="sig-param">masks=None</em>, <em class="sig-param">tags=None</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM.expected_log_probability" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the log-probability of the data given current
+model parameters.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.hmm.HMM.log_prior">
+<code class="sig-name descname">log_prior</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM.log_prior" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the log prior probability of the model parameters</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.hmm.HMM.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.hmm.HMM.sample">
+<code class="sig-name descname">sample</code><span class="sig-paren">(</span><em class="sig-param">T</em>, <em class="sig-param">prefix=None</em>, <em class="sig-param">input=None</em>, <em class="sig-param">tag=None</em>, <em class="sig-param">with_noise=True</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HMM.sample" title="Permalink to this definition">¶</a></dt>
+<dd><p>Sample synthetic data from the model. Optionally, condition on a given
+prefix (preceding discrete states and data).</p>
+<dl class="simple">
+<dt>T<span class="classifier">int</span></dt><dd><p>number of time steps to sample</p>
+</dd>
+<dt>prefix<span class="classifier">(zpre, xpre)</span></dt><dd><p>Optional prefix of discrete states (zpre) and continuous states (xpre)
+zpre must be an array of integers taking values 0…num_states-1.
+xpre must be an array of the same length that has preceding observations.</p>
+</dd>
+<dt>input<span class="classifier">(T, input_dim) array_like</span></dt><dd><p>Optional inputs to specify for sampling</p>
+</dd>
+<dt>tag<span class="classifier">object</span></dt><dd><p>Optional tag indicating which “type” of sampled data</p>
+</dd>
+<dt>with_noise<span class="classifier">bool</span></dt><dd><p>Whether or not to sample data with noise.</p>
+</dd>
+</dl>
+<dl class="simple">
+<dt>z_sample<span class="classifier">array_like of type int</span></dt><dd><p>Sequence of sampled discrete states</p>
+</dd>
+<dt>x_sample<span class="classifier">(T x observation_dim) array_like</span></dt><dd><p>Array of sampled data</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.hmm.HSMM">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.hmm.</code><code class="sig-name descname">HSMM</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">*</em>, <em class="sig-param">M=0</em>, <em class="sig-param">init_state_distn=None</em>, <em class="sig-param">transitions='nb'</em>, <em class="sig-param">transition_kwargs=None</em>, <em class="sig-param">observations='gaussian'</em>, <em class="sig-param">observation_kwargs=None</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HSMM" title="Permalink to this definition">¶</a></dt>
+<dd><p>Hidden semi-Markov model with non-geometric duration distributions.
+The trick is to expand the state space with “super states” and “sub states”
+that effectively count duration. We rely on the transition model to
+specify a “state map,” which maps the super states (1, .., K) to
+super+sub states ((1,1), …, (1,r_1), …, (K,1), …, (K,r_K)).
+Here, r_k denotes the number of sub-states of state k.</p>
+<dl class="method">
+<dt id="ssm.hmm.HSMM.expected_log_probability">
+<code class="sig-name descname">expected_log_probability</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs=None</em>, <em class="sig-param">masks=None</em>, <em class="sig-param">tags=None</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HSMM.expected_log_probability" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the log probability of the data under the current
+model parameters.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>datas</strong> – single array or list of arrays of data.</p>
+</dd>
+</dl>
+<p>:return total log probability of the data.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.hmm.HSMM.sample">
+<code class="sig-name descname">sample</code><span class="sig-paren">(</span><em class="sig-param">T</em>, <em class="sig-param">prefix=None</em>, <em class="sig-param">input=None</em>, <em class="sig-param">tag=None</em>, <em class="sig-param">with_noise=True</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.hmm.HSMM.sample" title="Permalink to this definition">¶</a></dt>
+<dd><p>Sample synthetic data from the model. Optionally, condition on a given
+prefix (preceding discrete states and data).</p>
+<dl class="simple">
+<dt>T<span class="classifier">int</span></dt><dd><p>number of time steps to sample</p>
+</dd>
+<dt>prefix<span class="classifier">(zpre, xpre)</span></dt><dd><p>Optional prefix of discrete states (zpre) and continuous states (xpre)
+zpre must be an array of integers taking values 0…num_states-1.
+xpre must be an array of the same length that has preceding observations.</p>
+</dd>
+<dt>input<span class="classifier">(T, input_dim) array_like</span></dt><dd><p>Optional inputs to specify for sampling</p>
+</dd>
+<dt>tag<span class="classifier">object</span></dt><dd><p>Optional tag indicating which “type” of sampled data</p>
+</dd>
+<dt>with_noise<span class="classifier">bool</span></dt><dd><p>Whether or not to sample data with noise.</p>
+</dd>
+</dl>
+<dl class="simple">
+<dt>z_sample<span class="classifier">array_like of type int</span></dt><dd><p>Sequence of sampled discrete states</p>
+</dd>
+<dt>x_sample<span class="classifier">(T x observation_dim) array_like</span></dt><dd><p>Array of sampled data</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<span class="target" id="module-ssm.lds"></span><dl class="class">
+<dt id="ssm.lds.SLDS">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.lds.</code><code class="sig-name descname">SLDS</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">*</em>, <em class="sig-param">M=0</em>, <em class="sig-param">init_state_distn=None</em>, <em class="sig-param">transitions='standard'</em>, <em class="sig-param">transition_kwargs=None</em>, <em class="sig-param">hierarchical_transition_tags=None</em>, <em class="sig-param">dynamics='gaussian'</em>, <em class="sig-param">dynamics_kwargs=None</em>, <em class="sig-param">hierarchical_dynamics_tags=None</em>, <em class="sig-param">emissions='gaussian_orthog'</em>, <em class="sig-param">emission_kwargs=None</em>, <em class="sig-param">hierarchical_emission_tags=None</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.lds.SLDS" title="Permalink to this definition">¶</a></dt>
+<dd><p>Switching linear dynamical system fit with
+stochastic variational inference on the marginal model,
+integrating out the discrete states.</p>
+<dl class="method">
+<dt id="ssm.lds.SLDS.log_prior">
+<code class="sig-name descname">log_prior</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ssm.lds.SLDS.log_prior" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the log prior probability of the model parameters</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.lds.SLDS.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.lds.SLDS.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.lds.LDS">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.lds.</code><code class="sig-name descname">LDS</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">D</em>, <em class="sig-param">*</em>, <em class="sig-param">M=0</em>, <em class="sig-param">dynamics='gaussian'</em>, <em class="sig-param">dynamics_kwargs=None</em>, <em class="sig-param">hierarchical_dynamics_tags=None</em>, <em class="sig-param">emissions='gaussian_orthog'</em>, <em class="sig-param">emission_kwargs=None</em>, <em class="sig-param">hierarchical_emission_tags=None</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.lds.LDS" title="Permalink to this definition">¶</a></dt>
+<dd><p>Switching linear dynamical system fit with
+stochastic variational inference on the marginal model,
+integrating out the discrete states.</p>
+<dl class="method">
+<dt id="ssm.lds.LDS.log_prior">
+<code class="sig-name descname">log_prior</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ssm.lds.LDS.log_prior" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the log prior probability of the model parameters</p>
+</dd></dl>
+
+</dd></dl>
+
+<span class="target" id="module-ssm.transitions"></span><dl class="class">
+<dt id="ssm.transitions.InputDrivenTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">InputDrivenTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M</em>, <em class="sig-param">alpha=1</em>, <em class="sig-param">kappa=0</em>, <em class="sig-param">l2_penalty=0.0</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.InputDrivenTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Hidden Markov Model whose transition probabilities are
+determined by a generalized linear model applied to the
+exogenous input.</p>
+<dl class="method">
+<dt id="ssm.transitions.InputDrivenTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.InputDrivenTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.InputDrivenTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.InputDrivenTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.NegativeBinomialSemiMarkovTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">NegativeBinomialSemiMarkovTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">r_min=1</em>, <em class="sig-param">r_max=20</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.NegativeBinomialSemiMarkovTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><blockquote>
+<div><p>Semi-Markov transition model with negative binomial (NB) distributed
+state durations, as compared to the geometric state durations in the
+standard Markov model.  The negative binomial has higher variance than
+the geometric, but its mode can be greater than 1.</p>
+<p>The NB(r, p) distribution, with r a positive integer and p a probability
+in [0, 1], is this distribution over number of heads before seeing
+r tails where the probability of heads is p. The number of heads
+between each tails is an independent geometric random variable.  Thus,
+the total number of heads is the sum of r independent and identically
+distributed geometric random variables.</p>
+<p>We can “embed” the semi-Markov model with negative binomial durations
+in the standard Markov model by expanding the state space.  Map each
+discrete state k to r new states: (k,1), (k,2), …, (k,r_k),
+for k in 1, …, K. The total number of states is sum_k r_k,
+where state k has a NB(r_k, p_k) duration distribution.</p>
+<p>The transition probabilities are as follows. The probability of staying
+within the same “super state” are:</p>
+<p>p(z_{t+1} = (k,i) | z_t = (k,i)) = p_k</p>
+<p>and for 0 &lt;= j &lt;= r_k - i</p>
+<p>p(z_{t+1} = (k,i+j) | z_t = (k,i)) = (1-p_k)^{j-i} p_k</p>
+<p>The probability of flipping (r_k - i + 1) tails in a row in state k;
+i.e. the probability of exiting super state k, is (1-p_k)^{r_k-i+1}.
+Thus, the probability of transitioning to a new super state is:</p>
+<p>p(z_{t+1} = (j,1) | z_t = (k,i)) = (1-p_k)^{r_k-i+1} * P[k, j]</p>
+<p>where P[k, j] is a transition matrix with zero diagonal.</p>
+<p>As a sanity check, note that the sum of probabilities is indeed 1:</p>
+<dl class="simple">
+<dt>sum_{j=i}^{r_k} p(z_{t+1} = (k,j) | z_t = (k,i))</dt><dd><ul class="simple">
+<li><p>sum_{m</p></li>
+</ul>
+</dd>
+</dl>
+</div></blockquote>
+<p>eq k}  p(z_{t+1} = (m, 1) | z_t = (k, i))</p>
+<blockquote>
+<div><p>= sum_{j=0}^{r_k-i} (1-p_k)^j p_k + sum_{m</p>
+</div></blockquote>
+<p>eq k} (1-p_k)^{r_k-i+1} * P[k, j]</p>
+<blockquote>
+<div><p>= p_k (1-(1-p_k)^{r_k-i+1}) / (1-(1-p_k)) + (1-p_k)^{r_k-i+1}</p>
+<p>= 1 - (1-p_k)^{r_k-i+1} + (1 - p_k)^{r_k-i+1}</p>
+<p>= 1.</p>
+<p>where we used the geometric series and the fact that sum_{j != k} P[k, j] = 1.</p>
+</div></blockquote>
+<dl class="method">
+<dt id="ssm.transitions.NegativeBinomialSemiMarkovTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">samples</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.NegativeBinomialSemiMarkovTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.NegativeBinomialSemiMarkovTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.NegativeBinomialSemiMarkovTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.RBFRecurrentTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">RBFRecurrentTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">alpha=1</em>, <em class="sig-param">kappa=0</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RBFRecurrentTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Recurrent transitions with radial basis functions for parameterizing
+the next state probability given current continuous data. We have,</p>
+<dl class="simple">
+<dt>p(z_{t+1} = k | z_t, x_t)</dt><dd><p>propto N(x_t | mu_k, Sigma_k)        imes pi_{z_t, z_{t+1})</p>
+</dd>
+</dl>
+<p>where {mu_k, Sigma_k, pi_k}_{k=1}^K are learned parameters.
+Equivalently,</p>
+<dl>
+<dt>log p(z_{t+1} = k | z_t, x_t)</dt><dd><p>= log N(x_t | mu_k, Sigma_k) + log pi_{z_t, z_{t+1}) + const
+= -D/2 log(2pi) -1/2 log <a href="#id1"><span class="problematic" id="id2">|Sigma_k|</span></a></p>
+<blockquote>
+<div><p>-1/2 (x - mu_k)^T Sigma_k^{-1} (x-mu_k)
++ log pi{z_t, z_{t+1}}</p>
+</div></blockquote>
+</dd>
+</dl>
+<p>The difference between this and the recurrent model above is that the
+log transition matrices are quadratic functions of x rather than linear.</p>
+<p>While we’re at it, there’s no harm in adding a linear term to the log
+transition matrices to capture input dependencies.</p>
+<dl class="method">
+<dt id="ssm.transitions.RBFRecurrentTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RBFRecurrentTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.RBFRecurrentTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RBFRecurrentTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.RecurrentOnlyTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">RecurrentOnlyTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentOnlyTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Only allow the past observations and inputs to influence the
+next state.  Get rid of the transition matrix and replace it
+with a constant bias r.</p>
+<dl class="method">
+<dt id="ssm.transitions.RecurrentOnlyTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentOnlyTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.RecurrentOnlyTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentOnlyTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.RecurrentTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">RecurrentTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">alpha=1</em>, <em class="sig-param">kappa=0</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generalization of the input driven HMM in which the observations serve as future inputs</p>
+<dl class="method">
+<dt id="ssm.transitions.RecurrentTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.RecurrentTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.RecurrentTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.StationaryTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">StationaryTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.StationaryTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Standard Hidden Markov Model with fixed initial distribution and transition matrix.</p>
+<dl class="method">
+<dt id="ssm.transitions.StationaryTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.StationaryTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="ssm.transitions.StationaryTransitions.permute">
+<code class="sig-name descname">permute</code><span class="sig-paren">(</span><em class="sig-param">perm</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.StationaryTransitions.permute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Permute the discrete latent states.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.transitions.StickyTransitions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">StickyTransitions</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">alpha=1</em>, <em class="sig-param">kappa=100</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.StickyTransitions" title="Permalink to this definition">¶</a></dt>
+<dd><p>Upweight the self transition prior.</p>
+<p>pi_k ~ Dir(alpha + kappa * e_k)</p>
+<dl class="method">
+<dt id="ssm.transitions.StickyTransitions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.StickyTransitions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the transitions, default to BFGS.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.transitions.adam">
+<code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">adam</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.adam" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.transitions.bfgs">
+<code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">bfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.bfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.transitions.lbfgs">
+<code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">lbfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.lbfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.transitions.rmsprop">
+<code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">rmsprop</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.rmsprop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.transitions.sgd">
+<code class="sig-prename descclassname">ssm.transitions.</code><code class="sig-name descname">sgd</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.transitions.sgd" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<span class="target" id="module-ssm.observations"></span><dl class="class">
+<dt id="ssm.observations.AltRobustAutoRegressiveDiagonalNoiseObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">AltRobustAutoRegressiveDiagonalNoiseObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AltRobustAutoRegressiveDiagonalNoiseObservations" title="Permalink to this definition">¶</a></dt>
+<dd><p>An alternative formulation of the robust AR model where the noise is
+distributed according to a independent scalar t distribution,</p>
+<p>For each output dimension d,</p>
+<blockquote>
+<div><p>epsilon_d ~ t(0, sigma_d^2, nu_d)</p>
+</div></blockquote>
+<p>which is equivalent to,</p>
+<blockquote>
+<div><p>tau_d ~ Gamma(nu_d/2, nu_d/2)
+epsilon_d | tau_d ~ N(0, sigma_d^2 / tau_d)</p>
+</div></blockquote>
+<dl class="method">
+<dt id="ssm.observations.AltRobustAutoRegressiveDiagonalNoiseObservations.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">num_em_iters=1</em>, <em class="sig-param">optimizer='adam'</em>, <em class="sig-param">num_iters=10</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AltRobustAutoRegressiveDiagonalNoiseObservations.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>Student’s t is a scale mixture of Gaussians.  We can estimate its
+parameters using the EM algorithm. See the notebook in doc/students_t
+for complete details.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.AutoRegressiveDiagonalNoiseObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">AutoRegressiveDiagonalNoiseObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em>, <em class="sig-param">l2_penalty_V=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AutoRegressiveDiagonalNoiseObservations" title="Permalink to this definition">¶</a></dt>
+<dd><p>AutoRegressive observation model with diagonal Gaussian noise.</p>
+<blockquote>
+<div><p>(x_t | z_t = k, u_t) ~ N(A_k x_{t-1} + b_k + V_k u_t, S_k)</p>
+</div></blockquote>
+<p>where</p>
+<blockquote>
+<div><p>S_k = diag([sigma_{k,1}, …, sigma_{k, D}])</p>
+</div></blockquote>
+<p>The parameters are fit via maximum likelihood estimation.</p>
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.AutoRegressiveObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">AutoRegressiveObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em>, <em class="sig-param">l2_penalty_V=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AutoRegressiveObservations" title="Permalink to this definition">¶</a></dt>
+<dd><p>AutoRegressive observation model with Gaussian noise.</p>
+<blockquote>
+<div><p>(x_t | z_t = k, u_t) ~ N(A_k x_{t-1} + b_k + V_k u_t, S_k)</p>
+</div></blockquote>
+<p>where S_k is a positive definite covariance matrix.</p>
+<p>The parameters are fit via maximum likelihood estimation.</p>
+<dl class="method">
+<dt id="ssm.observations.AutoRegressiveObservations.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">J0=None</em>, <em class="sig-param">h0=None</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AutoRegressiveObservations.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the observations, default to SGD.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.AutoRegressiveObservationsNoInput">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">AutoRegressiveObservationsNoInput</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.AutoRegressiveObservationsNoInput" title="Permalink to this definition">¶</a></dt>
+<dd><p>AutoRegressive observation model without the inputs.</p>
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.IndependentAutoRegressiveObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">IndependentAutoRegressiveObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.IndependentAutoRegressiveObservations" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.observations.IndependentAutoRegressiveObservations.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.IndependentAutoRegressiveObservations.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step cannot be done in closed form for the observations, default to SGD.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.RobustAutoRegressiveDiagonalNoiseObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">RobustAutoRegressiveDiagonalNoiseObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em>, <em class="sig-param">l2_penalty_V=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.RobustAutoRegressiveDiagonalNoiseObservations" title="Permalink to this definition">¶</a></dt>
+<dd><p>AR model where the noise is distributed according to a multivariate t distribution,</p>
+<blockquote>
+<div><p>epsilon ~ t(0, Sigma, nu)</p>
+</div></blockquote>
+<p>which is equivalent to,</p>
+<blockquote>
+<div><p>tau ~ Gamma(nu/2, nu/2)
+epsilon | tau ~ N(0, Sigma / tau)</p>
+</div></blockquote>
+<p>Here, Sigma is a diagonal covariance matrix.</p>
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.RobustAutoRegressiveObservations">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">RobustAutoRegressiveObservations</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em>, <em class="sig-param">l2_penalty_V=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.RobustAutoRegressiveObservations" title="Permalink to this definition">¶</a></dt>
+<dd><p>AR model where the noise is distributed according to a multivariate t distribution,</p>
+<blockquote>
+<div><p>epsilon ~ t(0, Sigma, nu)</p>
+</div></blockquote>
+<p>which is equivalent to,</p>
+<blockquote>
+<div><p>tau ~ Gamma(nu/2, nu/2)
+epsilon | tau ~ N(0, Sigma / tau)</p>
+</div></blockquote>
+<p>Here, Sigma is a general covariance matrix.</p>
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.observations.RobustAutoRegressiveObservationsNoInput">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">RobustAutoRegressiveObservationsNoInput</code><span class="sig-paren">(</span><em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">lags=1</em>, <em class="sig-param">l2_penalty_A=1e-08</em>, <em class="sig-param">l2_penalty_b=1e-08</em>, <em class="sig-param">l2_penalty_V=1e-08</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.RobustAutoRegressiveObservationsNoInput" title="Permalink to this definition">¶</a></dt>
+<dd><p>RobusAutoRegressiveObservations model without the inputs.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.observations.adam">
+<code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">adam</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.adam" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.observations.bfgs">
+<code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">bfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.bfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.observations.lbfgs">
+<code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">lbfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.lbfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.observations.rmsprop">
+<code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">rmsprop</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.rmsprop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.observations.sgd">
+<code class="sig-prename descclassname">ssm.observations.</code><code class="sig-name descname">sgd</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.observations.sgd" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<span class="target" id="module-ssm.emissions"></span><dl class="class">
+<dt id="ssm.emissions.AutoRegressiveEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">AutoRegressiveEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.AutoRegressiveEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.AutoRegressiveIdentityEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">AutoRegressiveIdentityEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.AutoRegressiveIdentityEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.AutoRegressiveNeuralNetworkEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">AutoRegressiveNeuralNetworkEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.AutoRegressiveNeuralNetworkEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.AutoRegressiveOrthogonalEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">AutoRegressiveOrthogonalEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.AutoRegressiveOrthogonalEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.BernoulliEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">BernoulliEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">link='logit'</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.BernoulliEmissions" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.emissions.BernoulliEmissions.hessian_log_emissions_prob">
+<code class="sig-name descname">hessian_log_emissions_prob</code><span class="sig-paren">(</span><em class="sig-param">data</em>, <em class="sig-param">input</em>, <em class="sig-param">mask</em>, <em class="sig-param">tag</em>, <em class="sig-param">x</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.BernoulliEmissions.hessian_log_emissions_prob" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="simple">
+<dt>d/dx  (y - p) * C</dt><dd><p>= -dpsi/dx (dp/dpsi)  C
+= -C p (1-p) C</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.BernoulliOrthogonalEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">BernoulliOrthogonalEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">link='logit'</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.BernoulliOrthogonalEmissions" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.emissions.BernoulliOrthogonalEmissions.hessian_log_emissions_prob">
+<code class="sig-name descname">hessian_log_emissions_prob</code><span class="sig-paren">(</span><em class="sig-param">data</em>, <em class="sig-param">input</em>, <em class="sig-param">mask</em>, <em class="sig-param">tag</em>, <em class="sig-param">x</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.BernoulliOrthogonalEmissions.hessian_log_emissions_prob" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="simple">
+<dt>d/dx  (y - p) * C</dt><dd><p>= -dpsi/dx (dp/dpsi)  C
+= -C p (1-p) C</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.GaussianEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">GaussianEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.GaussianEmissions" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.emissions.GaussianEmissions.m_step">
+<code class="sig-name descname">m_step</code><span class="sig-paren">(</span><em class="sig-param">discrete_expectations</em>, <em class="sig-param">continuous_expectations</em>, <em class="sig-param">datas</em>, <em class="sig-param">inputs</em>, <em class="sig-param">masks</em>, <em class="sig-param">tags</em>, <em class="sig-param">optimizer='bfgs'</em>, <em class="sig-param">maxiter=100</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.GaussianEmissions.m_step" title="Permalink to this definition">¶</a></dt>
+<dd><p>If M-step in Laplace-EM cannot be done in closed form for the emissions, default to SGD.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.GaussianOrthogonalEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">GaussianOrthogonalEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.GaussianOrthogonalEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.PoissonEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">PoissonEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">link='log'</em>, <em class="sig-param">bin_size=1.0</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.PoissonEmissions" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.emissions.PoissonEmissions.hessian_log_emissions_prob">
+<code class="sig-name descname">hessian_log_emissions_prob</code><span class="sig-paren">(</span><em class="sig-param">data</em>, <em class="sig-param">input</em>, <em class="sig-param">mask</em>, <em class="sig-param">tag</em>, <em class="sig-param">x</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.PoissonEmissions.hessian_log_emissions_prob" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="simple">
+<dt>d/dx log p(y | x) = d/dx [y * (Cx + Fu + d) - exp(Cx + Fu + d)</dt><dd><p>= y * C - lmbda * C
+= (y - lmbda) * C</p>
+</dd>
+<dt>d/dx  (y - lmbda)^T C = d/dx -exp(Cx + Fu + d)^T C</dt><dd><p>= -C^T exp(Cx + Fu + d)^T C</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.PoissonOrthogonalEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">PoissonOrthogonalEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">link='log'</em>, <em class="sig-param">bin_size=1.0</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.PoissonOrthogonalEmissions" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="method">
+<dt id="ssm.emissions.PoissonOrthogonalEmissions.hessian_log_emissions_prob">
+<code class="sig-name descname">hessian_log_emissions_prob</code><span class="sig-paren">(</span><em class="sig-param">data</em>, <em class="sig-param">input</em>, <em class="sig-param">mask</em>, <em class="sig-param">tag</em>, <em class="sig-param">x</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.PoissonOrthogonalEmissions.hessian_log_emissions_prob" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="simple">
+<dt>d/dx log p(y | x) = d/dx [y * (Cx + Fu + d) - exp(Cx + Fu + d)</dt><dd><p>= y * C - lmbda * C
+= (y - lmbda) * C</p>
+</dd>
+<dt>d/dx  (y - lmbda)^T C = d/dx -exp(Cx + Fu + d)^T C</dt><dd><p>= -C^T exp(Cx + Fu + d)^T C</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.StudentsTEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">StudentsTEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.StudentsTEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="class">
+<dt id="ssm.emissions.StudentsTOrthogonalEmissions">
+<em class="property">class </em><code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">StudentsTOrthogonalEmissions</code><span class="sig-paren">(</span><em class="sig-param">N</em>, <em class="sig-param">K</em>, <em class="sig-param">D</em>, <em class="sig-param">M=0</em>, <em class="sig-param">single_subspace=True</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.StudentsTOrthogonalEmissions" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="function">
+<dt id="ssm.emissions.adam">
+<code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">adam</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.adam" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.emissions.bfgs">
+<code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">bfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.bfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.emissions.lbfgs">
+<code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">lbfgs</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">verbose=False</em>, <em class="sig-param">num_iters=1000</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">suppress_warnings=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.lbfgs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Minimize a given loss function with scipy.optimize.minimize.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.emissions.rmsprop">
+<code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">rmsprop</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.rmsprop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="ssm.emissions.sgd">
+<code class="sig-prename descclassname">ssm.emissions.</code><code class="sig-name descname">sgd</code><span class="sig-paren">(</span><em class="sig-param">loss</em>, <em class="sig-param">x0</em>, <em class="sig-param">callback=None</em>, <em class="sig-param">num_iters=200</em>, <em class="sig-param">state=None</em>, <em class="sig-param">full_output=False</em>, <em class="sig-param">**kwargs</em><span class="sig-paren">)</span><a class="headerlink" href="#ssm.emissions.sgd" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generic stochastic gradient descent step.</p>
+</dd></dl>
+
+</div>
+<div class="section" id="indices-and-tables">
+<h1>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Permalink to this headline">¶</a></h1>
+<ul class="simple">
+<li><p><a class="reference internal" href="genindex.html"><span class="std std-ref">Index</span></a></p></li>
+<li><p><a class="reference internal" href="py-modindex.html"><span class="std std-ref">Module Index</span></a></p></li>
+<li><p><a class="reference internal" href="search.html"><span class="std std-ref">Search Page</span></a></p></li>
+</ul>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="#">SSM</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="#">Documentation overview</a><ul>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Scott Linderman.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 2.1.2</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/index.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
