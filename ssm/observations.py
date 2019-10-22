@@ -14,7 +14,7 @@ from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 import ssm.stats as stats
-
+import ssm.regression as regression
 
 class Observations(object):
 
@@ -585,6 +585,98 @@ class PoissonObservations(Observations):
         of latent discrete states.
         """
         return expectations.dot(np.exp(self.log_lambdas))
+
+
+class PoissonGLMObservations(Observations):
+    """
+    Poisson observations with a GLM mapping from inputs to rates.
+
+    lambda_{n,t} = f(w_{z_t, n}^T x_t + b_{n, z_t}))
+
+    where
+
+    n:    neuron index
+    t:    time index
+    z_t:  discrete state at time t
+    x_t:  input at time t
+    """
+
+    def __init__(self, K, D, M=0, mean_function="softplus",
+                 weight_mean=0, weight_variance=1):
+        """
+        K:  number of discrete states
+        D:  number of neurons
+        M:  number of input dimensions
+        """
+        super(PoissonGLMObservations, self).__init__(K, D, M)
+        self.mean_function = mean_function
+
+        # Set the prior
+        self.weight_mean = weight_mean * np.ones(M + 1)
+        self.weight_var = weight_variance * np.eye(M + 1)
+
+        # Initialize weights
+        self.W = npr.randn(K, D, M)
+        self.b = npr.randn(K, D)
+
+    @property
+    def params(self):
+        return (self.W, self.b)
+
+    @params.setter
+    def params(self, value):
+        self.W, self.b = value
+
+    def permute(self, perm):
+        self.W = self.W[perm]
+        self.b = self.b[perm]
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        # TODO
+        pass
+
+    def log_likelihoods(self, data, input, mask, tag):
+        # inputs:   (T, M)
+        # data:     (T, D)
+        # weights:  (K, D, M)
+        # biases:   (K, D)
+        # lambdas:  (T, K, D)
+        # lls:      (T, K)
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('tm,kdm->tkd', input, self.W) + self.b[None, :, :])
+        mask = np.ones_like(data, dtype=bool) if mask is None else mask
+        return stats.poisson_logpdf(data[:, None, :], lambdas, mask=mask[:, None, :])
+
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('m,kdm->kd', input, self.W) + self.b)
+        return npr.poisson(lambdas[z])
+
+    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        Xs = np.row_stack(inputs)
+        ys = np.row_stack(datas)
+
+        for k in range(self.K):
+            for d in range(self.D):
+                self.W[k, d], self.b[k, d] = \
+                    regression.fit_scalar_glm(Xs, ys[:, d], weights=weights[:, k],
+                        model="poisson", mean_function=self.mean_function, fit_intercept=True,
+                        prior=(self.weight_mean, self.weight_var),
+                        initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
+
+                assert np.all(np.isfinite(self.W))
+                assert np.all(np.isfinite(self.b))
+
+    def smooth(self, expectations, data, input, tag):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('tm,kdm->tkd', input, self.W) + self.b[None, :, :])
+        return np.sum(expectations[:, :, None] * lambdas, axis=1)
 
 
 class CategoricalObservations(Observations):

@@ -118,6 +118,7 @@ def fit_scalar_glm(Xs, ys,
                    mean_function="logistic",
                    model_hypers={},
                    fit_intercept=True,
+                   initial_theta=None,
                    weights=None,
                    X_variances=None,
                    prior=None,
@@ -127,6 +128,8 @@ def fit_scalar_glm(Xs, ys,
                    max_iter=50,
                    verbose=False):
     """
+    TODO:  Add hyperparameter to initialize theta
+
     Fit a GLM with vector inputs X and scalar outputs y.
     The user provides the inputs, outputs, the model type
     (i.e. the conditional distribution of the data), and
@@ -179,6 +182,11 @@ def fit_scalar_glm(Xs, ys,
     fit_intercept: bool specifying whether or not to fit an intercept
         term. If True, the output will include the weights (an array
         of length p), and a scalar intercept value.
+
+    initial_theta: optional array of shape (p,) or (p+1,) depending on
+        whether `fit_intercept` is true.  This sets the initial
+        parameter value.  Default is None, which initializes the
+        parameter vector to zero.
 
     weights: array of shape (n,) or list of arrays with shapes
         [(n_1,), (n_2,), ..., (n_M,)] containing non-negative weights
@@ -312,7 +320,12 @@ def fit_scalar_glm(Xs, ys,
     h = lambda x, y, theta: g()
 
     # Initialize the weights, theta
-    theta = np.zeros(p)
+    if initial_theta is not None:
+        assert initial_theta.shape == (p,)
+        theta = initial_theta.copy()
+    else:
+        theta = np.zeros(p)
+
     dtheta = np.inf
     converged = False
     for itr in range(max_iter):
@@ -322,7 +335,8 @@ def fit_scalar_glm(Xs, ys,
         # Check convergence
         converged = dtheta < threshold
         if converged:
-            print("Converged in ", itr, " iterations.")
+            if verbose:
+                print("Converged in ", itr, " iterations.")
             break
 
         # Compute the negative Hessian (J) and the gradient (h) of the objective

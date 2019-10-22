@@ -86,6 +86,7 @@ class HMM(object):
             bernoulli=obs.BernoulliObservations,
             categorical=obs.CategoricalObservations,
             poisson=obs.PoissonObservations,
+            poisson_glm=obs.PoissonGLMObservations,
             vonmises=obs.VonMisesObservations,
             ar=obs.AutoRegressiveObservations,
             autoregressive=obs.AutoRegressiveObservations,
@@ -196,7 +197,7 @@ class HMM(object):
             assert input.shape == (T,) + M
 
         # Get the type of the observations
-        dummy_data = self.observations.sample_x(0, np.empty(0,) + D)
+        dummy_data = self.observations.sample_x(0, np.empty(0,) + D, input=np.empty(M,))
         dtype = dummy_data.dtype
 
         # Initialize the data array

@@ -1,4 +1,4 @@
-# distutils: extra_compile_args = -O3
+# distutils: extra_compile_args = -O3 -march=native
 # cython: wraparound=False
 # cython: boundscheck=False
 # cython: nonecheck=False
