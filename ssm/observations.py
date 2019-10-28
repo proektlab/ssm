@@ -683,7 +683,10 @@ class PoissonGLMObservations(Observations):
         lambdas = f(np.einsum('m,kdm->kd', input, self.W) + self.b)
         return npr.poisson(lambdas[z])
 
-    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+    def m_step(self, *args, **kwargs):
+        return self._fast_m_step(*args, **kwargs)
+
+    def _slow_m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         weights = np.concatenate([Ez for Ez, _, _ in expectations])
         Xs = np.row_stack(inputs)
         ys = np.row_stack(datas)
@@ -693,8 +696,57 @@ class PoissonGLMObservations(Observations):
                 self.W[k, d], self.b[k, d] = \
                     regression.fit_scalar_glm(Xs, ys[:, d], weights=weights[:, k],
                         model="poisson", mean_function=self.mean_function, fit_intercept=True,
-                        prior=(self.weight_mean, self.weight_var))
-                        # initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
+                        prior=(self.weight_mean, self.weight_var),
+                        initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
+
+                assert np.all(np.isfinite(self.W))
+                assert np.all(np.isfinite(self.b))
+
+    def _fast_m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        X = np.row_stack(inputs)  # (timesteps x n_inputs)
+        Y = np.row_stack(datas)   # (timesteps x n_units)
+
+        # Add bias term.
+        nt = X.shape[0]
+        X = np.column_stack([X, np.ones(nt)])
+
+        for k in range(self.K):
+            Wk = np.column_stack([self.W[k], self.b[k]]) # (n_units x n_inputs)
+            z = weights[:, k]
+
+            Xw = X @ Wk.T           # timesteps x units
+            exp_Xw = np.exp(Xw)     # timesteps x units
+
+            losses = np.squeeze(z[None, :] @ (exp_Xw - Y * Xw))  # units
+
+            zX = z[:, None] * X
+            grads = (exp_Xw - Y).T @ zX  # units x inputs
+
+            # units x inputs x inputs
+            hess = np.einsum("ij,ihk->kjh", X, exp_Xw[:, None, :] * zX[:, :, None])
+            dWk = np.linalg.solve(hess, grads) 
+
+            for n in range(self.D):
+                ss = 1.0
+                converged = False
+                
+                while (not converged) and (ss > 1e-7):
+                    Wnew = Wk[n] - (ss * dWk[n])
+                    _Xw = X @ Wnew
+                    _eXw = np.exp(_Xw)
+                    newloss = z @ (_eXw - Y[:, n] * _Xw)
+
+                    if newloss < losses[n]:
+                        self.W[k, n] = Wnew[:-1]
+                        self.b[k, n] = Wnew[-1]
+                        converged = True
+                    else:
+                        ss *= .5
+                
+                if not converged:
+                    # print("warn: failed to converge.")
+                    break
 
                 assert np.all(np.isfinite(self.W))
                 assert np.all(np.isfinite(self.b))
