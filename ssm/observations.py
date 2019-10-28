@@ -602,7 +602,8 @@ class PoissonGLMObservations(Observations):
     """
 
     def __init__(self, K, D, M=0, mean_function="softplus",
-                 weight_mean=0, weight_variance=1):
+                 weight_mean=0, weight_variance=1,
+                 init_m_steps=0, init_softmax_temp=1.0):
         """
         K:  number of discrete states
         D:  number of neurons
@@ -610,14 +611,16 @@ class PoissonGLMObservations(Observations):
         """
         super(PoissonGLMObservations, self).__init__(K, D, M)
         self.mean_function = mean_function
+        self.init_m_steps = init_m_steps
+        self.init_softmax_temp = init_softmax_temp
 
         # Set the prior
         self.weight_mean = weight_mean * np.ones(M + 1)
         self.weight_var = weight_variance * np.eye(M + 1)
 
         # Initialize weights
-        self.W = npr.randn(K, D, M)
-        self.b = npr.randn(K, D)
+        self.W = npr.randn(K, D, M) / (np.sqrt(M) * 3)
+        self.b = np.zeros((K, D))
 
     @property
     def params(self):
@@ -633,8 +636,35 @@ class PoissonGLMObservations(Observations):
 
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # TODO
-        pass
+        """Initialize model with mixture of GLMs."""
+        if self.init_m_steps == 0:
+            return
+
+        # Initialize expectations.
+        expectations = []
+        K = self.W.shape[0]
+        for inp in inputs:
+            T = inp.shape[0]
+            ep = np.zeros((T, K))
+            # ep[np.arange(T), npr.randint(K, size=T)] = 1.0
+            ep = npr.exponential(size=(T, K))
+            ep /= np.sum(ep, axis=1, keepdims=True)
+            expectations.append((ep, None, None))
+
+        # Perform one m-step.
+        print('performing an initial m-step...')
+        self.m_step(expectations, datas, inputs, masks, tags)
+
+        # Perform more m-steps.
+        for _ in range(self.init_m_steps - 1):
+            expectations = []
+            for d, inp, m, tg in zip(datas, inputs, masks, tags):
+                lls = self.init_softmax_temp * self.log_likelihoods(d, inp, m, tg)
+                ep = np.exp(lls - logsumexp(lls, axis=-1, keepdims=True))
+                expectations.append((ep, None, None))
+
+            print('performing an initial m-step...')
+            self.m_step(expectations, datas, inputs, masks, tags)
 
     def log_likelihoods(self, data, input, mask, tag):
         # inputs:   (T, M)
@@ -663,8 +693,8 @@ class PoissonGLMObservations(Observations):
                 self.W[k, d], self.b[k, d] = \
                     regression.fit_scalar_glm(Xs, ys[:, d], weights=weights[:, k],
                         model="poisson", mean_function=self.mean_function, fit_intercept=True,
-                        prior=(self.weight_mean, self.weight_var),
-                        initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
+                        prior=(self.weight_mean, self.weight_var))
+                        # initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
 
                 assert np.all(np.isfinite(self.W))
                 assert np.all(np.isfinite(self.b))

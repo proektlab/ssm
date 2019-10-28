@@ -123,6 +123,7 @@ class StationaryTransitions(Transitions):
         T, D = data.shape
         return np.zeros((T-1, D, D))
 
+
 class StickyTransitions(StationaryTransitions):
     """
     Upweight the self transition prior.
