@@ -376,6 +376,15 @@ def _predict(m, S, A, B, Q, u, mpred, Spred):
     mpred[:] = A @ m + B @ u
     Spred[:] = A @ S @ A.T + Q
 
+
+@numba.jit(nopython=True, cache=True)
+def gaussian_logpdf(y, m, S):
+    D = m.shape[0]
+    L = np.linalg.cholesky(S)
+    x = np.linalg.solve(L, y - m)
+    return -0.5 * D * np.log(2 * np.pi) - np.sum(np.log(np.diag(L))) -0.5 * np.sum(x**2)
+
+
 @numba.jit(nopython=True, cache=True)
 def _sample_gaussian(m, S, z):
     # Sample a multivariate Gaussian with mean m, covariance S,
@@ -418,10 +427,17 @@ def kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     predicted_mus[0] = mu0
     predicted_Sigmas[0] = S0
     K = np.zeros((D, N))
+    ll = 0
 
     # Run the Kalman filter
     for t in range(T):
-        # filtered_mus[t], filtered_Sigmas[t] = \
+        # Update the log likelihood
+        ll += gaussian_logpdf(ys[t],
+            Cs[t] @ predicted_mus[t] + Ds[t] @ us[t],
+            Cs[t] @ predicted_Sigmas[t] @ Cs[t].T + Rs[t]
+            )
+
+        # Condition on this frame's observations
         _condition_on(predicted_mus[t], predicted_Sigmas[t],
             Cs[t], Ds[t], Rs[t], us[t], ys[t],
             filtered_mus[t], filtered_Sigmas[t])
@@ -429,12 +445,12 @@ def kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
         if t == T-1:
             break
 
-        # predicted_mus[t+1], predicted_Sigmas[t+1] = \
+        # Predict the next frame's latent state
         _predict(filtered_mus[t], filtered_Sigmas[t],
             As[t], Bs[t], Qs[t], us[t],
             predicted_mus[t+1], predicted_Sigmas[t+1])
 
-    return filtered_mus, filtered_Sigmas
+    return ll, filtered_mus, filtered_Sigmas
 
 
 @numba.jit(nopython=True, cache=True)
@@ -466,7 +482,7 @@ def kalman_sample(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     D = mu0.shape[0]
 
     # Run the Kalman Filter
-    filtered_mus, filtered_Sigmas = \
+    ll, filtered_mus, filtered_Sigmas = \
         kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
 
     # Initialize outputs, noise, and temporary variables
@@ -484,7 +500,7 @@ def kalman_sample(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
 
         xs[t] = _sample_gaussian(mu_cond, Sigma_cond, noise[t])
 
-    return xs
+    return ll, xs
 
 
 @numba.jit(nopython=True, cache=True)
@@ -525,7 +541,7 @@ def kalman_smoother(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     D = mu0.shape[0]
 
     # Run the Kalman Filter
-    filtered_mus, filtered_Sigmas = \
+    ll, filtered_mus, filtered_Sigmas = \
         kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
 
     # Initialize outputs, noise, and temporary variables
@@ -550,7 +566,7 @@ def kalman_smoother(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
                              Gt @ (smoothed_Sigmas[t+1] - As[t] @ filtered_Sigmas[t] @ As[t].T - Qs[t]) @ Gt.T
         smoothed_CrossSigmas[t] = Gt @ smoothed_Sigmas[t+1]
 
-    return smoothed_mus, smoothed_Sigmas, smoothed_CrossSigmas
+    return ll, smoothed_mus, smoothed_Sigmas, smoothed_CrossSigmas
 
 
 ##
@@ -624,10 +640,50 @@ def check_info_args_shape(J_ini, h_ini, log_Z_ini,
 
 
 @numba.jit(nopython=True, cache=True)
-def kalman_info_filter(J_ini, h_ini, log_Z_ini,
-                       J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
-                       J_obs, h_obs, log_Z_obs,
-                       return_predictions=False):
+def _info_condition_on(J_pred, h_pred, J_obs, h_obs, log_Z_obs, J_cond, h_cond):
+    J_cond[:] = J_pred + J_obs
+    h_cond[:] = h_pred + h_obs
+    return log_Z_obs
+
+
+@numba.jit(nopython=True, cache=True)
+def _info_lognorm(J, h):
+    # Update the log normalizer, marginalizing out x_t
+    D = h.shape[0]
+    log_Z = 0.5 * h @ np.linalg.solve(J, h)
+    log_Z += -0.5 * np.linalg.slogdet(J)[1]
+    log_Z += 0.5 * D * np.log(2 * np.pi)
+    return log_Z
+
+
+@numba.jit(nopython=True, cache=True)
+def _info_predict(J_filt, h_filt, J_11, J_21, J_22, h_1, h_2, log_Z_dyn, J_pred, h_pred):
+    tmp_J = J_filt + J_11
+    tmp_h = h_filt + h_1
+    J_pred[:] = J_22 - np.dot(J_21, np.linalg.solve(tmp_J, J_21.T))
+    h_pred[:] = h_2 - np.dot(J_21, np.linalg.solve(tmp_J, tmp_h))
+
+    # Update the log normalizer, marginalizing out x_t
+    return log_Z_dyn + _info_lognorm(tmp_J, tmp_h)
+
+
+@numba.jit(nopython=True, cache=True)
+def _sample_info_gaussian(J, h, noise):
+     L = np.linalg.cholesky(J)
+     # sample = spla.solve_triangular(L, noise, lower=True, trans='T')
+     sample = np.linalg.solve(L.T, noise)
+     # from scipy.linalg.lapack import dpotrs
+     # sample += dpotrs(L, h, lower=True)[0]
+     # sample += spla.cho_solve((L, True), h)
+     sample += np.linalg.solve(J, h)
+     return sample
+
+
+@numba.jit(nopython=True, cache=True)
+def kalman_info_filter_with_predictions(
+    J_ini, h_ini, log_Z_ini,
+    J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+    J_obs, h_obs, log_Z_obs):
     """
     Information form Kalman filter for time-varying linear dynamical system with inputs.
     """
@@ -653,15 +709,15 @@ def kalman_info_filter(J_ini, h_ini, log_Z_ini,
     # Initialize
     predicted_Js[0] = J_ini
     predicted_hs[0] = h_ini
+    log_Z = log_Z_ini
 
     # Run the Kalman information filter
-    for t in range(T):
+    for t in range(T-1):
         # Condition on the observed data
-        filtered_Js[t] = predicted_Js[t] + J_obs[t]
-        filtered_hs[t] = predicted_hs[t] + h_obs[t]
-
-        if t == T-1:
-            break
+        log_Z += _info_condition_on(
+            predicted_Js[t], predicted_hs[t],
+            J_obs[t], h_obs[t], log_Z_obs[t],
+            filtered_Js[t], filtered_hs[t])
 
         # Extract blocks of the dynamics potentials
         J_11 = J_dyn_11[t * hetero]
@@ -671,22 +727,36 @@ def kalman_info_filter(J_ini, h_ini, log_Z_ini,
         h_2 = h_dyn_2[t * hetero]
 
         # Predict the next frame
-        predicted_Js[t+1] = J_22 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, J_21.T))
-        predicted_hs[t+1] = h_2 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, filtered_hs[t] + h_1))
+        log_Z += _info_predict(
+            filtered_Js[t], filtered_hs[t],
+            J_11, J_21, J_22, h_1, h_2, log_Z_dyn[t],
+            predicted_Js[t+1], predicted_hs[t+1])
 
-    return filtered_Js, filtered_hs
+    # Condition on the last observation
+    log_Z += _info_condition_on(
+        predicted_Js[-1], predicted_hs[-1],
+        J_obs[-1], h_obs[-1], log_Z_obs[-1],
+        filtered_Js[-1], filtered_hs[-1])
+
+    # Account for the last observation potential
+    log_Z += _info_lognorm(filtered_Js[-1], filtered_hs[-1])
+
+    return log_Z, filtered_Js, filtered_hs, predicted_Js, predicted_hs
 
 
 @numba.jit(nopython=True, cache=True)
-def _sample_info_gaussian(J, h, noise):
-     L = np.linalg.cholesky(J)
-     # sample = spla.solve_triangular(L, noise, lower=True, trans='T')
-     sample = np.linalg.solve(L.T, noise)
-     # from scipy.linalg.lapack import dpotrs
-     # sample += dpotrs(L, h, lower=True)[0]
-     # sample += spla.cho_solve((L, True), h)
-     sample += np.linalg.solve(J, h)
-     return sample
+def kalman_info_filter(
+    J_ini, h_ini, log_Z_ini,
+    J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+    J_obs, h_obs, log_Z_obs):
+
+    log_Z, filtered_Js, filtered_hs, _, _ = \
+        kalman_info_filter_with_predictions(
+            J_ini, h_ini, log_Z_ini,
+            J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+            J_obs, h_obs, log_Z_obs)
+
+    return log_Z, filtered_Js, filtered_hs
 
 
 @numba.jit(nopython=True, cache=True)
@@ -711,7 +781,7 @@ def kalman_info_sample(J_ini, h_ini, log_Z_ini,
     h_dyn_2 = np.atleast_2d(h_dyn_2)
 
     # Run the forward filter
-    filtered_Js, filtered_hs = \
+    log_Z, filtered_Js, filtered_hs = \
         kalman_info_filter(J_ini, h_ini, log_Z_ini,
                            J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                            J_obs, h_obs, log_Z_obs)
@@ -759,10 +829,11 @@ def kalman_info_smoother(J_ini, h_ini, log_Z_ini,
     h_dyn_2 = np.atleast_2d(h_dyn_2)
 
     # Run the forward filter
-    filtered_Js, filtered_hs = \
-        kalman_info_filter(J_ini, h_ini, log_Z_ini,
-                           J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
-                           J_obs, h_obs, log_Z_obs)
+    log_Z, filtered_Js, filtered_hs, predicted_Js, predicted_hs = \
+        kalman_info_filter_with_predictions(
+            J_ini, h_ini, log_Z_ini,
+            J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+            J_obs, h_obs, log_Z_obs)
 
     # Allocate output arrays
     smoothed_Js = np.zeros((T, D, D))
@@ -787,11 +858,8 @@ def kalman_info_smoother(J_ini, h_ini, log_Z_ini,
         h_2 = h_dyn_2[t * hetero]
 
         # Combine filtered and smoothed estimates
-        # TODO: We're duplicating work here: J_inner uses the forward predictions
-        # TODO: that were computed in kalman_info_filter.
-        # TODO: It's annoying to return four outputs from the info filter though...
-        J_inner = smoothed_Js[t+1] + np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, J_21.T))
-        h_inner = smoothed_hs[t+1] + np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, filtered_hs[t] + h_1))
+        J_inner = smoothed_Js[t+1] - predicted_Js[t+1] + J_22
+        h_inner = smoothed_hs[t+1] - predicted_hs[t+1] + h_2
         smoothed_Js[t] = filtered_Js[t] + J_11 - np.dot(J_21.T, np.linalg.solve(J_inner, J_21))
         smoothed_hs[t] = filtered_hs[t] + h_1 - np.dot(J_21.T, np.linalg.solve(J_inner, h_inner))
 
@@ -818,7 +886,7 @@ def kalman_info_smoother(J_ini, h_ini, log_Z_ini,
         #   S_b = -J_a^{-1} J_b S_c
         smoothed_CrossSigmas[t] = -np.linalg.solve(filtered_Js[t] + J_11, np.dot(J_21.T, smoothed_Sigmas[t+1]))
 
-    return smoothed_mus, smoothed_Sigmas, smoothed_CrossSigmas
+    return log_Z, smoothed_mus, smoothed_Sigmas, smoothed_CrossSigmas
 
 
 def make_lds_parameters(T, D, N, U):
@@ -864,8 +932,9 @@ def test_lds(T=1000, D=2, N=10, U=3):
 
     # Test the standard Kalman filter
     from pylds.lds_messages_interface import kalman_filter as kalman_filter_ref
-    _, filtered_mus1, filtered_Sigmas1 = kalman_filter_ref(*args)
-    filtered_mus2, filtered_Sigmas2 = kalman_filter(*args)
+    ll1, filtered_mus1, filtered_Sigmas1 = kalman_filter_ref(*args)
+    ll2, filtered_mus2, filtered_Sigmas2 = kalman_filter(*args)
+    assert np.allclose(ll1, ll2)
     assert np.allclose(filtered_mus1, filtered_mus2)
     assert np.allclose(filtered_Sigmas1, filtered_Sigmas2)
 
@@ -874,10 +943,11 @@ def test_lds(T=1000, D=2, N=10, U=3):
 
     # Test the standard Kalman smoother
     from pylds.lds_messages_interface import E_step as kalman_smoother_ref
-    _, smoothed_mus1, smoothed_Sigmas1, ExnxT1 = kalman_smoother_ref(*args)
-    smoothed_mus2, smoothed_Sigmas2, smoothed_CrossSigmas2 = kalman_smoother(*args)
+    ll1, smoothed_mus1, smoothed_Sigmas1, ExnxT1 = kalman_smoother_ref(*args)
+    ll2, smoothed_mus2, smoothed_Sigmas2, smoothed_CrossSigmas2 = kalman_smoother(*args)
     ExxnT2 = smoothed_CrossSigmas2 + smoothed_mus2[:-1][:, :, None] * smoothed_mus2[1:, None, :]
     ExnxT2 = np.swapaxes(ExxnT2, 1, 2)
+    assert np.allclose(ll1, ll2)
     assert np.allclose(smoothed_mus1, smoothed_mus2)
     assert np.allclose(smoothed_Sigmas1, smoothed_Sigmas2)
     assert np.allclose(ExnxT1, ExnxT2)
@@ -885,13 +955,14 @@ def test_lds(T=1000, D=2, N=10, U=3):
     # Test the info form filter
     info_args = convert_mean_to_info_args(*args)
     from pylds.lds_messages_interface import kalman_info_filter as kalman_info_filter_ref
-    _, filtered_Js1, filtered_hs1 = kalman_info_filter_ref(*info_args)
-    filtered_Js2, filtered_hs2 = kalman_info_filter(*info_args)
+    log_Z1, filtered_Js1, filtered_hs1 = kalman_info_filter_ref(*info_args)
+    log_Z2, filtered_Js2, filtered_hs2 = kalman_info_filter(*info_args)
+    assert np.allclose(log_Z1, log_Z2)
     assert np.allclose(filtered_Js1, filtered_Js2)
     assert np.allclose(filtered_hs1, filtered_hs2)
 
     # Test the info form smoother
-    smoothed_mus3, smoothed_Sigmas3, smoothed_CrossSigmas3 = kalman_info_smoother(*info_args)
+    _, smoothed_mus3, smoothed_Sigmas3, smoothed_CrossSigmas3 = kalman_info_smoother(*info_args)
     assert np.allclose(smoothed_mus1, smoothed_mus3)
     assert np.allclose(smoothed_Sigmas1, smoothed_Sigmas3)
     assert np.allclose(smoothed_CrossSigmas2, smoothed_CrossSigmas3)
