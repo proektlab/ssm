@@ -12,15 +12,6 @@ print("USE_OPENMP", USE_OPENMP)
 # Create the extensions. Manually enumerate the required
 extensions = []
 extensions.append(
-    Extension('ssm.messages',
-              extra_compile_args=[],
-              extra_link_args=[],
-              language="c++",
-              sources=["ssm/messages.pyx"],
-              )
-)
-
-extensions.append(
     Extension('ssm.cstats',
               extra_compile_args=["-fopenmp"] if USE_OPENMP else [],
               extra_link_args=["-fopenmp"] if USE_OPENMP else [],
@@ -28,7 +19,6 @@ extensions.append(
               sources=["ssm/cstats.pyx"],
               )
 )
-
 extensions = cythonize(extensions)
 
 
@@ -38,7 +28,7 @@ setup(name='ssm',
       author='Scott Linderman',
       author_email='scott.linderman@stanford.edu',
       url='https://github.com/slinderman/ssm',
-      install_requires=['future', 'numpy', 'scipy', 'matplotlib', 'joblib', 'scikit-learn', 'tqdm', 'autograd'],
+      install_requires=['future', 'numpy', 'scipy', 'matplotlib', 'numba', 'scikit-learn', 'tqdm', 'autograd'],
       packages=['ssm'],
       ext_modules=extensions,
       include_dirs=[np.get_include(),],
