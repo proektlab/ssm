@@ -2,6 +2,8 @@ import numba
 import numpy as np
 import numpy.random as npr
 import scipy.special as scsp
+import scipy.linalg as spla
+
 
 @numba.jit(nopython=True, cache=True)
 def logsumexp(x):
@@ -553,63 +555,94 @@ def kalman_smoother(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
 
 ##
 # Information form filtering and smoothing
+# We write each conditional distribution in terms of its natural parameters.
+#
+# log p(x_1) = x_1^T J_ini x_1 + x_1^T h_ini - log_Z_ini
+# log p(x_t | x_{t-1}) = (x_t, x_{t-1})^T J_dyn (x_t, x_{t-1}) + (x_t, x_{t-1})^T h_dyn - log_Z_dyn
+# log p(y_t | x_t) = x_t^T J_obs x_t + x_t^T h_obs - log_Z_obs
+#
+# Notation:
+#
+# T:  number of time steps
+# D:  continuous latent state dimension
+#
+# Initial distribution parameters:
+# J_ini:     (D, D)       initial state precision
+# h_ini:     (D,)         initial state bias
+# log_Z_ini: (,)          initial state log normalizer
+#
+# If time-varying dynamics:
+# J_dyn_11:  (T-1, D, D)  upper left block of dynamics precision
+# J_dyn_21:  (T-1, D, D)  lower left block of dynamics precision
+# J_dyn_22:  (T-1, D, D)  lower right block of dynamics precision
+# h_dyn_1:   (T-1, D)     upper block of dynamics bias
+# h_dyn_2:   (T-1, D)     lower block of dynamics bias
+# log_Z_dyn: (T-1,)       dynamics log normalizer
+#
+# If stationary dynamics:
+# J_dyn_11:  (D, D)       upper left block of dynamics precision
+# J_dyn_21:  (D, D)       lower left block of dynamics precision
+# J_dyn_22:  (D, D)       lower right block of dynamics precision
+# h_dyn_1:   (D,)         upper block of dynamics bias
+# h_dyn_2:   (D,)         lower block of dynamics bias
+# log_Z_dyn: (,)          dynamics log normalizer
+#
+# Observation distribution parameters
+# J_obs:     (T, D, D)    observation precision
+# h_obs:     (T, D)       observation bias
+# log_Z_obs: (T,)         observation log normalizer
 ##
 @numba.jit(nopython=True, cache=True)
-def kalman_info_filter(J_ini, h_ini, log_Z_ini,
-                       J_dyn, h_dyn, log_Z_dyn,
-                       J_obs, h_obs, log_Z_obs):
-    """
-    Information form Kalman filter for time-varying linear dynamical system with inputs.
-    We write each conditional distribution in terms of its natural parameters.
-
-    log p(x_1) = x_1^T J_ini x_1 + x_1^T h_ini - log_Z_ini
-    log p(x_t | x_{t-1}) = (x_t, x_{t-1})^T J_dyn (x_t, x_{t-1}) + (x_t, x_{t-1})^T h_dyn - log_Z_dyn
-    log p(y_t | x_t) = x_t^T J_obs x_t + x_t^T h_obs - log_Z_obs
-
-    Notation:
-
-    T:  number of time steps
-    D:  continuous latent state dimension
-
-    Input shapes:
-    J_ini:     (D, D)       initial state precision
-    h_ini:     (D,)         initial state bias
-    log_Z_ini: (,)          initial state log normalizer
-
-    If time-varying dynamics:
-    J_dyn:     (T-1, D, D)  dynamics precision
-    h_dyn:     (T-1, D)     dynamics bias
-    log_Z_dyn: (T-1,)       dynamics log normalizer
-
-    If stationary dynamics:
-    J_dyn:     (D, D)       dynamics precision
-    h_dyn:     (D,)         dynamics bias
-    log_Z_dyn: (,)          dynamics log normalizer
-
-    J_obs:     (T, D, D)    observation precision
-    h_obs:     (T, D)       observation bias
-    log_Z_obs: (T,)         observation log normalizer
-    """
+def check_info_args_shape(J_ini, h_ini, log_Z_ini,
+                          J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                          J_obs, h_obs, log_Z_obs):
     T, D = h_obs.shape
 
     # Check shapes
     assert J_ini.shape == (D, D)
     assert h_ini.shape == (D,)
-    assert np.isscalar(log_Z_init)
+    # assert np.isscalar(log_Z_ini)
     assert J_obs.shape == (T, D, D)
     assert log_Z_obs.shape == (T,)
 
     # Check for time-varying dynamics
-    assert J_dyn.shape == (2*D, 2*D) or J_dyn.shape == (T-1, 2*D, 2*D)
-    hetero = J_dyn.ndim == 3
+    assert J_dyn_11.shape == (D, D) or J_dyn_11.shape == (T-1, D, D)
+    hetero = J_dyn_11.ndim == 3
     if hetero:
-        assert h_dyn.shape == (T-1, 2*D) and log_Z_dyn.shape == (T-1,)
+        assert J_dyn_21.shape == (T-1, D, D)
+        assert J_dyn_22.shape == (T-1, D, D)
+        assert h_dyn_1.shape == (T-1, D)
+        assert h_dyn_2.shape == (T-1, D)
+        assert log_Z_dyn.shape == (T-1,)
     else:
-        assert h_dyn.shape == (2*D,) and np.isscalar(log_Z_dyn)
-        # add an extra dimension so message passing code works
-        J_dyn = J_dyn[None, :, :]
-        h_dyn = h_dyn[None, :, :]
-        log_Z_dyn = log_Z_dyn * np.ones(1)
+        assert J_dyn_21.shape == (D, D)
+        assert J_dyn_22.shape == (D, D)
+        assert h_dyn_1.shape == (D,)
+        assert h_dyn_2.shape == (D,)
+
+    return hetero
+
+
+@numba.jit(nopython=True, cache=True)
+def kalman_info_filter(J_ini, h_ini, log_Z_ini,
+                       J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                       J_obs, h_obs, log_Z_obs,
+                       return_predictions=False):
+    """
+    Information form Kalman filter for time-varying linear dynamical system with inputs.
+    """
+    check_info_args_shape(J_ini, h_ini, log_Z_ini,
+                          J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                          J_obs, h_obs, log_Z_obs)
+    T, D = h_obs.shape
+
+    # Broadcast stationary dynamics parameters
+    hetero = J_dyn_11.ndim == 3
+    J_dyn_11 = np.atleast_3d(J_dyn_11)
+    J_dyn_21 = np.atleast_3d(J_dyn_21)
+    J_dyn_22 = np.atleast_3d(J_dyn_22)
+    h_dyn_1 = np.atleast_2d(h_dyn_1)
+    h_dyn_2 = np.atleast_2d(h_dyn_2)
 
     # Allocate output arrays
     filtered_Js = np.zeros((T, D, D))
@@ -618,8 +651,8 @@ def kalman_info_filter(J_ini, h_ini, log_Z_ini,
     predicted_hs = np.zeros((T, D))
 
     # Initialize
-    predicted_Js[0] = J0
-    predicted_hs[0] = h0
+    predicted_Js[0] = J_ini
+    predicted_hs[0] = h_ini
 
     # Run the Kalman information filter
     for t in range(T):
@@ -631,89 +664,56 @@ def kalman_info_filter(J_ini, h_ini, log_Z_ini,
             break
 
         # Extract blocks of the dynamics potentials
-        J_11 = J_dyn[t * hetero, :D, :D]
-        J_21 = J_dyn[t * hetero, D:, :D]
-        J_22 = J_dyn[t * hetero, D:, D:]
-        h_1 = h_dyn[t * hetero, :D]
-        h_2 = h_dyn[t * hetero, D:]
+        J_11 = J_dyn_11[t * hetero]
+        J_21 = J_dyn_21[t * hetero]
+        J_22 = J_dyn_22[t * hetero]
+        h_1 = h_dyn_1[t * hetero]
+        h_2 = h_dyn_2[t * hetero]
 
         # Predict the next frame
-        predicted_Js[t+1] = J_22 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11), J_21.T)
-        predicted_hs[t+1] = h_2 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11), filtered_hs[t] + h_1)
+        predicted_Js[t+1] = J_22 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, J_21.T))
+        predicted_hs[t+1] = h_2 - np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, filtered_hs[t] + h_1))
 
-    return filtered_Js, filtered_hs, predicted_Js, predicted_hs
+    return filtered_Js, filtered_hs
 
 
 @numba.jit(nopython=True, cache=True)
-def sample_info_gaussian(J, h, noise):
-     from scipy.linalg.lapack import dpotrs
+def _sample_info_gaussian(J, h, noise):
      L = np.linalg.cholesky(J)
-     sample = scipy.linalg.solve_triangular(L, noise, lower=True, trans='T')
-     sample += dpotrs(L, h, lower=True)[0]
+     # sample = spla.solve_triangular(L, noise, lower=True, trans='T')
+     sample = np.linalg.solve(L.T, noise)
+     # from scipy.linalg.lapack import dpotrs
+     # sample += dpotrs(L, h, lower=True)[0]
+     # sample += spla.cho_solve((L, True), h)
+     sample += np.linalg.solve(J, h)
      return sample
+
 
 @numba.jit(nopython=True, cache=True)
 def kalman_info_sample(J_ini, h_ini, log_Z_ini,
-                       J_dyn, h_dyn, log_Z_dyn,
+                       J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                        J_obs, h_obs, log_Z_obs,
                        num_samples=1):
     """
     Information form Kalman sampling for time-varying linear dynamical system with inputs.
-    We write each conditional distribution in terms of its natural parameters.
-
-    log p(x_1) = x_1^T J_ini x_1 + x_1^T h_ini - log_Z_ini
-    log p(x_t | x_{t-1}) = (x_t, x_{t-1})^T J_dyn (x_t, x_{t-1}) + (x_t, x_{t-1})^T h_dyn - log_Z_dyn
-    log p(y_t | x_t) = x_t^T J_obs x_t + x_t^T h_obs - log_Z_obs
-
-    Notation:
-
-    T:  number of time steps
-    D:  continuous latent state dimension
-
-    Input shapes:
-    J_ini:     (D, D)       initial state precision
-    h_ini:     (D,)         initial state bias
-    log_Z_ini: (,)          initial state log normalizer
-
-    If time-varying dynamics:
-    J_dyn:     (T-1, D, D)  dynamics precision
-    h_dyn:     (T-1, D)     dynamics bias
-    log_Z_dyn: (T-1,)       dynamics log normalizer
-
-    If stationary dynamics:
-    J_dyn:     (D, D)       dynamics precision
-    h_dyn:     (D,)         dynamics bias
-    log_Z_dyn: (,)          dynamics log normalizer
-
-    J_obs:     (T, D, D)    observation precision
-    h_obs:     (T, D)       observation bias
-    log_Z_obs: (T,)         observation log normalizer
     """
+    check_info_args_shape(J_ini, h_ini, log_Z_ini,
+                          J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                          J_obs, h_obs, log_Z_obs)
     T, D = h_obs.shape
 
-    # Check shapes
-    assert J_ini.shape == (D, D)
-    assert h_ini.shape == (D,)
-    assert np.isscalar(log_Z_init)
-    assert J_obs.shape == (T, D, D)
-    assert log_Z_obs.shape == (T,)
-
-    # Check for time-varying dynamics
-    assert J_dyn.shape == (2*D, 2*D) or J_dyn.shape == (T-1, 2*D, 2*D)
-    hetero = J_dyn.ndim == 3
-    if hetero:
-        assert h_dyn.shape == (T-1, 2*D) and log_Z_dyn.shape == (T-1,)
-    else:
-        assert h_dyn.shape == (2*D,) and np.isscalar(log_Z_dyn)
-        # add an extra dimension so message passing code works
-        J_dyn = J_dyn[None, :, :]
-        h_dyn = h_dyn[None, :, :]
-        log_Z_dyn = log_Z_dyn * np.ones(1)
+    # Broadcast stationary dynamics parameters
+    hetero = J_dyn_11.ndim == 3
+    J_dyn_11 = np.atleast_3d(J_dyn_11)
+    J_dyn_21 = np.atleast_3d(J_dyn_21)
+    J_dyn_22 = np.atleast_3d(J_dyn_22)
+    h_dyn_1 = np.atleast_2d(h_dyn_1)
+    h_dyn_2 = np.atleast_2d(h_dyn_2)
 
     # Run the forward filter
-    filtered_Js, filtered_hs, _, _ = \
+    filtered_Js, filtered_hs = \
         kalman_info_filter(J_ini, h_ini, log_Z_ini,
-                           J_dyn, h_dyn, log_Z_dyn,
+                           J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                            J_obs, h_obs, log_Z_obs)
 
     # Allocate output arrays
@@ -721,206 +721,182 @@ def kalman_info_sample(J_ini, h_ini, log_Z_ini,
     noise = npr.randn(T, D, num_samples)
 
     # Initialize with samples of the last state
-    samples[-1] = sample_info_gaussian(filtered_Js[-1], filtered_hs[-1][:, None], noise[-1])
+    samples[-1] = _sample_info_gaussian(filtered_Js[-1], np.reshape(filtered_hs[-1], (D, 1)), noise[-1])
 
     # Run the Kalman information filter
     for t in range(T-2, -1, -1):
         # Extract blocks of the dynamics potentials
-        J_11 = J_dyn[t * hetero, :D, :D]
-        J_21 = J_dyn[t * hetero, D:, :D]
-        J_22 = J_dyn[t * hetero, D:, D:]
-        h_1 = h_dyn[t * hetero, :D]
-        h_2 = h_dyn[t * hetero, D:]
+        J_11 = J_dyn_11[t * hetero]
+        J_21 = J_dyn_21[t * hetero]
+        h_1 = h_dyn_1[t * hetero]
 
         # Condition on the next observation
         J_post = filtered_Js[t] + J_11
         h_post = filtered_hs[t] + h_1 - np.dot(J_21, samples[t+1])
-        samples[t] = sample_info_gaussian(J_post, h_post, noise[t])
+        samples[t] = _sample_info_gaussian(J_post, h_post, noise[t])
 
-    if num_samples == 1:
-        return samples[:, :, 0]
-    else:
-        return samples
+    return samples
 
 
 @numba.jit(nopython=True, cache=True)
 def kalman_info_smoother(J_ini, h_ini, log_Z_ini,
-                         J_dyn, h_dyn, log_Z_dyn,
-                         J_obs, h_obs, log_Z_obs):
+                         J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                         J_obs, h_obs, log_Z_obs,):
     """
     Information form Kalman smoother for time-varying linear dynamical system with inputs.
-    We write each conditional distribution in terms of its natural parameters.
-
-    log p(x_1) = x_1^T J_ini x_1 + x_1^T h_ini - log_Z_ini
-    log p(x_t | x_{t-1}) = (x_t, x_{t-1})^T J_dyn (x_t, x_{t-1}) + (x_t, x_{t-1})^T h_dyn - log_Z_dyn
-    log p(y_t | x_t) = x_t^T J_obs x_t + x_t^T h_obs - log_Z_obs
-
-    Notation:
-
-    T:  number of time steps
-    D:  continuous latent state dimension
-
-    Input shapes:
-    J_ini:     (D, D)       initial state precision
-    h_ini:     (D,)         initial state bias
-    log_Z_ini: (,)          initial state log normalizer
-
-    If time-varying dynamics:
-    J_dyn:     (T-1, D, D)  dynamics precision
-    h_dyn:     (T-1, D)     dynamics bias
-    log_Z_dyn: (T-1,)       dynamics log normalizer
-
-    If stationary dynamics:
-    J_dyn:     (D, D)       dynamics precision
-    h_dyn:     (D,)         dynamics bias
-    log_Z_dyn: (,)          dynamics log normalizer
-
-    J_obs:     (T, D, D)    observation precision
-    h_obs:     (T, D)       observation bias
-    log_Z_obs: (T,)         observation log normalizer
     """
+    check_info_args_shape(J_ini, h_ini, log_Z_ini,
+                          J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
+                          J_obs, h_obs, log_Z_obs)
     T, D = h_obs.shape
 
-    # Check shapes
-    assert J_ini.shape == (D, D)
-    assert h_ini.shape == (D,)
-    assert np.isscalar(log_Z_init)
-    assert J_obs.shape == (T, D, D)
-    assert log_Z_obs.shape == (T,)
-
-    # Check for time-varying dynamics
-    assert J_dyn.shape == (2*D, 2*D) or J_dyn.shape == (T-1, 2*D, 2*D)
-    hetero = J_dyn.ndim == 3
-    if hetero:
-        assert h_dyn.shape == (T-1, 2*D) and log_Z_dyn.shape == (T-1,)
-    else:
-        assert h_dyn.shape == (2*D,) and np.isscalar(log_Z_dyn)
-        # add an extra dimension so message passing code works
-        J_dyn = J_dyn[None, :, :]
-        h_dyn = h_dyn[None, :, :]
-        log_Z_dyn = log_Z_dyn * np.ones(1)
+    # Broadcast stationary dynamics parameters
+    hetero = J_dyn_11.ndim == 3
+    J_dyn_11 = np.atleast_3d(J_dyn_11)
+    J_dyn_21 = np.atleast_3d(J_dyn_21)
+    J_dyn_22 = np.atleast_3d(J_dyn_22)
+    h_dyn_1 = np.atleast_2d(h_dyn_1)
+    h_dyn_2 = np.atleast_2d(h_dyn_2)
 
     # Run the forward filter
-    filtered_Js, filtered_hs, predicted_Js, predicted_hs = \
+    filtered_Js, filtered_hs = \
         kalman_info_filter(J_ini, h_ini, log_Z_ini,
-                           J_dyn, h_dyn, log_Z_dyn,
+                           J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                            J_obs, h_obs, log_Z_obs)
 
     # Allocate output arrays
     smoothed_Js = np.zeros((T, D, D))
     smoothed_hs = np.zeros((T, D))
+    smoothed_mus = np.zeros((T, D))
+    smoothed_Sigmas = np.zeros((T, D, D))
+    smoothed_CrossSigmas = np.zeros((T-1, D, D))
 
     # Initialize
     smoothed_Js[-1] = filtered_Js[-1]
     smoothed_hs[-1] = filtered_hs[-1]
+    smoothed_Sigmas[-1] = np.linalg.inv(smoothed_Js[-1])
+    smoothed_mus[-1] = np.dot(smoothed_Sigmas[-1], smoothed_hs[-1])
 
     # Run the Kalman information filter
     for t in range(T-2, -1, -1):
         # Extract blocks of the dynamics potentials
-        J_11 = J_dyn[t * hetero, :D, :D]
-        J_21 = J_dyn[t * hetero, D:, :D]
-        J_22 = J_dyn[t * hetero, D:, D:]
-        h_1 = h_dyn[t * hetero, :D]
-        h_2 = h_dyn[t * hetero, D:]
+        J_11 = J_dyn_11[t * hetero]
+        J_21 = J_dyn_21[t * hetero]
+        J_22 = J_dyn_22[t * hetero]
+        h_1 = h_dyn_1[t * hetero]
+        h_2 = h_dyn_2[t * hetero]
 
-        # Predict the next frame
-        J_inner = smoothed_Js[t+1] - predicted_Js[t+1] + J_22
-        h_inner = smoothed_hs[t+1] - predicted_hs[t+1] + h_2
+        # Combine filtered and smoothed estimates
+        # TODO: We're duplicating work here: J_inner uses the forward predictions
+        # TODO: that were computed in kalman_info_filter.
+        # TODO: It's annoying to return four outputs from the info filter though...
+        J_inner = smoothed_Js[t+1] + np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, J_21.T))
+        h_inner = smoothed_hs[t+1] + np.dot(J_21, np.linalg.solve(filtered_Js[t] + J_11, filtered_hs[t] + h_1))
         smoothed_Js[t] = filtered_Js[t] + J_11 - np.dot(J_21.T, np.linalg.solve(J_inner, J_21))
         smoothed_hs[t] = filtered_hs[t] + h_1 - np.dot(J_21.T, np.linalg.solve(J_inner, h_inner))
 
-    return smoothed_Js, smoothed_hs
+        # Convert info form to mean parameters
+        smoothed_Sigmas[t] = np.linalg.inv(smoothed_Js[t])
+        smoothed_mus[t] = np.dot(smoothed_Sigmas[t], smoothed_hs[t])
+
+        # TODO: Move this math to a separate document
+        # Compute the cross-covariance between times (t, t+1)
+        # We have
+        #
+        #   log p(x_t, x_{t+1} | y_{1:T})
+        #       = (x_t, x_{t+1})^T J (x_t, x_{t+1}) + ...
+        #
+        # where J = [J_a, J_b; J_b.T, J_c] is a (2D, 2D) precision matrix with
+        #   J_a = filtered_Js[t] + J_11
+        #   J_b = J_12
+        #
+        # Moreover, J^{-1} = [S_a, S_b; S_b.T, S_c] where
+        #   S_a = smoothed_Sigmas[t]
+        #   S_c = smoothed_Sigmas[t+1]
+        #
+        # We want to solve for S_b. From the block inversion formula we have
+        #   S_b = -J_a^{-1} J_b S_c
+        smoothed_CrossSigmas[t] = -np.linalg.solve(filtered_Js[t] + J_11, np.dot(J_21.T, smoothed_Sigmas[t+1]))
+
+    return smoothed_mus, smoothed_Sigmas, smoothed_CrossSigmas
 
 
-## Test
-def test_hmm():
-
-    def forward_pass_np(log_pi0, log_Ps, log_likes):
-        T, K = log_likes.shape
-        alphas = []
-        alphas.append(log_likes[0] + log_pi0)
-        for t in range(T-1):
-            anext = scsp.logsumexp(alphas[t] + log_Ps[t].T, axis=1)
-            anext += log_likes[t+1]
-            alphas.append(anext)
-        return np.array(alphas)
-
-    def make_parameters(T, K):
-        log_pi0 = -np.log(K) * np.ones(K)
-        As = npr.rand(T-1, K, K)
-        As /= As.sum(axis=2, keepdims=True)
-        log_Ps = np.log(As)
-        ll = npr.randn(T, K)
-        return log_pi0, log_Ps, ll
-
-
-    T = 1000
-    K = 3
-
-    # Test forward pass
-    log_pi0, log_Ps, ll = make_parameters(T, K)
-    a1 = forward_pass_np(log_pi0, log_Ps, ll)
-    a2 = np.zeros((T, K))
-    forward_pass(-np.log(K) * np.ones(K), log_Ps, ll, a2)
-    assert np.allclose(a1, a2)
-
-    # Test backward pass
-    from pyhsmm.internals.hmm_messages_interface import messages_backwards_log
-
-    # Make parameters
-    log_pi0 = -np.log(K) * np.ones(K)
-    As = npr.rand(K, K)
-    As /= As.sum(axis=-1, keepdims=True)
-    log_Ps = np.log(np.repeat(As[None, :, :], T-1, axis=0))
-    ll = npr.randn(T, K)
-
-    # Use pyhsmm to compute
-    true_betas = np.zeros((T, K))
-    messages_backwards_log(As, ll, true_betas)
-
-    # Use ssm to compute
-    test_betas = np.zeros((T, K))
-    backward_pass(log_Ps, ll, test_betas)
-
-    assert np.allclose(true_betas, test_betas)
-
-
-def test_lds():
-    T = 1000
-    D = 2
-    N = 10
+def make_lds_parameters(T, D, N, U):
     m0 = np.zeros(D)
     S0 = np.eye(D)
     As = np.tile(0.99 * np.eye(D)[None, :, :], (T, 1, 1))
-    Bs = np.zeros((T, D, 1))
+    Bs = np.zeros((T, D, U))
     Qs = np.tile(0.01 * np.eye(D)[None, :, :], (T, 1, 1))
     Cs = np.tile(npr.randn(1, N, D), (T, 1, 1))
-    Ds = np.zeros((T, N, 1))
+    Ds = np.zeros((T, N, U))
     Rs = np.tile(0.01 * np.eye(N)[None, :, :], (T, 1, 1))
-    us = np.ones((T, 1))
+    us = np.zeros((T, U))
     ys = np.sin(2 * np.pi * np.arange(T) / 50)[:, None] * npr.randn(1, 10) + 0.1 * npr.randn(T, N)
+    return m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys
 
-    # Filter
-    from pylds.lds_messages_interface import kalman_filter as kf
-    ll, filtered_mus1, filtered_Sigmas1 = kf(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
-    filtered_mus2, filtered_Sigmas2 = kalman_filter(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
+
+def convert_mean_to_info_args(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
+    T = ys.shape[0]
+
+    # Conver the initial distribution
+    J_ini = np.linalg.inv(S0)
+    h_ini = np.dot(J_ini, m0)
+
+    # Conver the dynamics distribution
+    Qi = np.linalg.inv(Qs[:-1])
+    QiA = np.matmul(Qi, As[:-1])
+    uB = np.matmul(us[:-1, None, :], np.swapaxes(Bs[:-1], 1, 2))
+    J_dyn_11 = np.matmul(np.swapaxes(As[:-1], 1, 2), QiA)
+    J_dyn_21 = -QiA
+    J_dyn_22 = Qi
+    h_dyn_1 = -np.matmul(uB, QiA)[:, 0, :]
+    h_dyn_2 = np.matmul(uB, Qi)[:, 0, :]
+
+    # Conver the emission distribution
+    RiC = np.linalg.solve(Rs, Cs)
+    J_obs = np.matmul(np.swapaxes(Cs, 1, 2), RiC)
+    h_obs = np.matmul(np.swapaxes(ys[:, :, None] - np.matmul(Ds, us[:, :, None]), 1, 2), RiC)[:, 0, :]
+    return J_ini, h_ini, 0, J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, np.zeros(T-1), J_obs, h_obs, np.zeros(T)
+
+
+def test_lds(T=1000, D=2, N=10, U=3):
+    args = make_lds_parameters(T, D, N, U)
+
+    # Test the standard Kalman filter
+    from pylds.lds_messages_interface import kalman_filter as kalman_filter_ref
+    _, filtered_mus1, filtered_Sigmas1 = kalman_filter_ref(*args)
+    filtered_mus2, filtered_Sigmas2 = kalman_filter(*args)
     assert np.allclose(filtered_mus1, filtered_mus2)
     assert np.allclose(filtered_Sigmas1, filtered_Sigmas2)
 
     # Sample
-    xs = kalman_sample(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
+    xs = kalman_sample(*args)
 
-    # Smooth
-    from pylds.lds_messages_interface import E_step as ks
-    ll, smoothed_mus1, smoothed_Sigmas1, ExnxT1 = ks(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
-    smoothed_mus2, smoothed_Sigmas2, smoothed_CrossSigmas = kalman_smoother(m0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys)
-    ExxnT2 = smoothed_CrossSigmas + smoothed_mus2[:-1][:, :, None] * smoothed_mus2[1:, None, :]
+    # Test the standard Kalman smoother
+    from pylds.lds_messages_interface import E_step as kalman_smoother_ref
+    _, smoothed_mus1, smoothed_Sigmas1, ExnxT1 = kalman_smoother_ref(*args)
+    smoothed_mus2, smoothed_Sigmas2, smoothed_CrossSigmas2 = kalman_smoother(*args)
+    ExxnT2 = smoothed_CrossSigmas2 + smoothed_mus2[:-1][:, :, None] * smoothed_mus2[1:, None, :]
     ExnxT2 = np.swapaxes(ExxnT2, 1, 2)
     assert np.allclose(smoothed_mus1, smoothed_mus2)
     assert np.allclose(smoothed_Sigmas1, smoothed_Sigmas2)
     assert np.allclose(ExnxT1, ExnxT2)
 
+    # Test the info form filter
+    info_args = convert_mean_to_info_args(*args)
+    from pylds.lds_messages_interface import kalman_info_filter as kalman_info_filter_ref
+    _, filtered_Js1, filtered_hs1 = kalman_info_filter_ref(*info_args)
+    filtered_Js2, filtered_hs2 = kalman_info_filter(*info_args)
+    assert np.allclose(filtered_Js1, filtered_Js2)
+    assert np.allclose(filtered_hs1, filtered_hs2)
+
+    # Test the info form smoother
+    smoothed_mus3, smoothed_Sigmas3, smoothed_CrossSigmas3 = kalman_info_smoother(*info_args)
+    assert np.allclose(smoothed_mus1, smoothed_mus3)
+    assert np.allclose(smoothed_Sigmas1, smoothed_Sigmas3)
+    assert np.allclose(smoothed_CrossSigmas2, smoothed_CrossSigmas3)
+
+    xs = kalman_info_sample(*info_args)
 
 if __name__ == "__main__":
-    test_hmm()
     test_lds()
