@@ -283,7 +283,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
     @property
     def mean_discrete_states(self):
         # Now compute the posterior expectations of z under q(z)
-        return [hmm_expected_states(prms["log_pi0"], prms["log_Ps"], prms["log_likes"])
+        return [hmm_expected_states(np.exp(prms["log_pi0"]), np.exp(prms["log_Ps"]), prms["log_likes"])
                 for prms in self.params]
 
     @property
@@ -337,7 +337,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
             negentropy += block_tridiagonal_log_probability(s, prms["J_diag"], prms["J_lower_diag"], prms["h"])
 
             # 2. Compute E_{q(z)}[ log q(z) ]
-            (Ez, Ezzp1, normalizer) = hmm_expected_states(prms["log_pi0"], prms["log_Ps"], prms["log_likes"])
+            (Ez, Ezzp1, normalizer) = hmm_expected_states(np.exp(prms["log_pi0"]), np.exp(prms["log_Ps"]), prms["log_likes"])
             negentropy -= normalizer # -log Z
             negentropy += np.sum(Ez[0] * prms["log_pi0"]) # initial factor
             negentropy += np.sum(Ez * prms["log_likes"]) # unitary factors

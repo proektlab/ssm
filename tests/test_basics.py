@@ -182,6 +182,7 @@ def test_viterbi(T=1000, K=20, D=2):
     hmm.observations.sigmasq = sigma * np.ones((K, D))
     z_star2 = hmm.most_likely_states(y)
 
+    assert z_star2.dtype == int
     assert np.allclose(z_star, z_star2)
 
 

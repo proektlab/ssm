@@ -233,10 +233,8 @@ def hmm_sample(pi0, Ps, ll):
 
 
 @numba.jit(nopython=True, cache=True)
-def viterbi(pi0, Ps, ll):
+def _viterbi(pi0, Ps, ll):
     """
-    Find the most likely state sequence
-
     This is modified from pyhsmm.internals.hmm_states
     by Matthew Johnson.
     """
@@ -264,6 +262,13 @@ def viterbi(pi0, Ps, ll):
         z[t] = args[t, int(z[t-1])]
 
     return z
+
+
+def viterbi(pi0, Ps, ll):
+    """
+    Find the most likely state sequence
+    """
+    return _viterbi(pi0, Ps, ll).astype(int)
 
 
 @numba.jit(nopython=True, cache=True)
