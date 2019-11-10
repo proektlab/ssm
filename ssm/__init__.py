@@ -1,4 +1,4 @@
 # Default imports for SSM
 
-from .hmm import *
-from .lds import *
+from ssm.hmm import *
+from ssm.lds import *

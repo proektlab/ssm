@@ -8,21 +8,22 @@ from autograd.tracer import getval
 from autograd.misc import flatten
 from autograd import value_and_grad, grad
 
-from .optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, bfgs, convex_combination
-from .optimizers import adam, sgd, rmsprop
-from .primitives import hmm_normalizer, symm_block_tridiag_matmul
-from .messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi
-from .util import ensure_args_are_lists, ensure_args_not_none, \
+from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, bfgs, convex_combination
+from ssm.optimizers import adam, sgd, rmsprop
+from ssm.primitives import hmm_normalizer, symm_block_tridiag_matmul
+from ssm.messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi, kalman_filter, kalman_smoother
+
+from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, \
     replicate, collapse, newtons_method_block_tridiag_hessian
 
-from . import observations as obs
-from . import transitions as trans
-from . import init_state_distns as isd
-from . import hierarchical as hier
-from . import emissions as emssn
-from . import hmm
-from . import variational as varinf
+import ssm.observations as obs
+import ssm.transitions as trans
+import ssm.init_state_distns as isd
+import ssm.hierarchical as hier
+import ssm.emissions as emssn
+import ssm.hmm as hmm
+import ssm.variational as varinf
 
 from scipy.optimize import minimize
 
@@ -820,17 +821,6 @@ class SLDS(object):
            Update them using block mean field coordinate ascent, if we have a
            Gaussian emission model and linear Gaussian dynamics, or using
            a Laplace approximation for nonconjugate models.
-
-        In the future, we could also consider some other possibilities, like:
-
-        3. Particle EM: run a (Rao-Blackwellized) particle filter targeting
-           the posterior distribution of the continuous latent states and
-           use its weighted trajectories to get the discrete states and perform
-           a Monte Carlo M-step.
-
-        4. Gibbs sampling: As above, if we have a conjugate emission and
-           dynamics model we can do block Gibbs sampling of the discrete and
-           continuous states.
         """
 
         # Specify fitting methods
@@ -877,9 +867,7 @@ class SLDS(object):
 
 class LDS(SLDS):
     """
-    Switching linear dynamical system fit with
-    stochastic variational inference on the marginal model,
-    integrating out the discrete states.
+    Standard linear dynamical system.
     """
     def __init__(self, N, D, *, M=0,
             dynamics="gaussian",
@@ -1009,3 +997,91 @@ class LDS(SLDS):
             assert np.isfinite(elbo)
 
         return elbo / n_samples
+
+
+class GaussianLDS(object):
+    """
+    Simple linear Gaussian dynamical system for learning purposes.
+    """
+    def __init__(self,
+                 data_dim,
+                 latent_dim,
+                 input_dim=0):
+
+        self.data_dim = self.N = data_dim
+        self.latent_dim = self.D = latent_dim
+        self.input_dim = self.M = input_dim
+        self.K = 1
+
+        # TODO: Make a nice LinearGaussianDynamics class
+        self.dynamics = obs.AutoRegressiveObservations(1, latent_dim, M=input_dim)
+        self.emissions = emssn.GaussianEmissions(data_dim, 1, latent_dim, M=input_dim)
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None, num_em_iters=25):
+        pass
+
+    @property
+    def params(self):
+        mu0 = self.dynamics.mu_init[0]
+        Sigma0 = self.dynamics.Sigmas_init[0]
+        A = self.dynamics.As[0]
+        B = np.column_stack((self.dynamics.Vs[0], self.dynamics.bs[0]))
+        Q = self.dynamics.Sigmas[0]
+        C = self.emissions.Cs[0]
+        D = np.column_stack((self.emissions.Fs[0], self.emissions.ds[0]))
+        R = np.diag(np.exp(self.emissions.inv_etas[0]))
+        return mu0, Sigma0, A, B, Q, C, D, R
+
+    def log_prior(self):
+        """
+        Compute the log prior probability of the model parameters
+        """
+        return self.dynamics.log_prior() + \
+               self.emissions.log_prior()
+
+    @ensure_args_are_lists
+    def log_likelihood(self, datas, inputs=None, masks=None, tags=None):
+        ll = 0
+        for data, input, mask, tags in zip(datas, inputs, masks, tags):
+            T = data.shape[0]
+            effective_input = np.column_stack((input, np.ones((T, 1))))
+            args = self.params + (effective_input, data)
+            ll += kalman_filter(*args)[0]
+        return ll
+
+
+    def sample(self, T, input=None, tag=None, prefix=None, with_noise=True):
+        # If inputs are not given, set them to zero
+        input = np.zeros((T, self.input_dim)) if input is None else input
+
+        latents = np.zeros((T, self.latent_dim))
+
+        # If prefix is not given, start with a sample from the initial state distribution
+        if prefix is None:
+            # Sample the first state from the initial distribution
+            latents[0] = self.dynamics.sample_x(0, np.zeros((0, self.latent_dim)), input=input[0], tag=tag, with_noise=with_noise)
+        else:
+            latents[0] = self.dynamics.sample_x(0, prefix, input=input[0], tag=tag, with_noise=with_noise)
+
+        # Sample forward according to the linear Gaussian dynamics
+        for t in range(1, T):
+            latents[t] = self.dynamics.sample_x(0, latents[:t], input=input[t], tag=tag, with_noise=with_noise)
+
+        # Sample observations given latent states
+        # TODO: sample in the loop above?
+        data = self.emissions.sample(np.zeros(T, dtype=int), latents, input=input, tag=tag)
+        return latents, data
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    lds = GaussianLDS(10, 2)
+    latents, data = lds.sample(100)
+    print(lds.log_likelihood(data))
+
+    plt.figure()
+    plt.plot(latents)
+    plt.figure()
+    plt.plot(data)
+    plt.show()
