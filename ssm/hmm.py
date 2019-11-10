@@ -265,6 +265,13 @@ class HMM(object):
         return hmm_filter(log_pi0, log_Ps, log_likes)
 
     @ensure_args_not_none
+    def posterior_sample(self, data, input=None, mask=None, tag=None):
+        log_pi0 = self.init_state_distn.log_initial_state_distn(data, input, mask, tag)
+        log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
+        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+        return hmm_sample(log_pi0, log_Ps, log_likes)
+
+    @ensure_args_not_none
     def smooth(self, data, input=None, mask=None, tag=None):
         """
         Compute the mean observation under the posterior distribution
