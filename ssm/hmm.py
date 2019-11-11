@@ -6,11 +6,10 @@ import autograd.numpy.random as npr
 from autograd import value_and_grad
 
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, convex_combination
-from ssm.primitives import hmm_normalizer
-from ssm.messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi
 from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, \
     replicate, collapse
+from ssm.posterior import HMMExactPosterior
 
 import ssm.observations as obs
 import ssm.transitions as trans
@@ -123,17 +122,7 @@ class HMM(object):
         self.transitions = transitions
         self.observations = observations
 
-    @property
-    def params(self):
-        return self.init_state_distn.params, \
-               self.transitions.params, \
-               self.observations.params
-
-    @params.setter
-    def params(self, value):
-        self.init_state_distn.params = value[0]
-        self.transitions.params = value[1]
-        self.observations.params = value[2]
+    # TODO: Expose properties for common model attributes of the model
 
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
@@ -243,36 +232,6 @@ class HMM(object):
         else:
             return z[pad:], data[pad:]
 
-    @ensure_args_not_none
-    def expected_states(self, data, input=None, mask=None, tag=None):
-        pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-        Ps = self.transitions.transition_matrices(data, input, mask, tag)
-        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-        return hmm_expected_states(pi0, Ps, log_likes)
-
-    @ensure_args_not_none
-    def most_likely_states(self, data, input=None, mask=None, tag=None):
-        pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-        Ps = self.transitions.transition_matrices(data, input, mask, tag)
-        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-        return viterbi(pi0, Ps, log_likes)
-
-    @ensure_args_not_none
-    def filter(self, data, input=None, mask=None, tag=None):
-        pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-        Ps = self.transitions.transition_matrices(data, input, mask, tag)
-        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-        return hmm_filter(pi0, Ps, log_likes)
-
-    @ensure_args_not_none
-    def smooth(self, data, input=None, mask=None, tag=None):
-        """
-        Compute the mean observation under the posterior distribution
-        of latent discrete states.
-        """
-        Ez, _, _ = self.expected_states(data, input, mask)
-        return self.observations.smooth(Ez, data, input, tag)
-
     def log_prior(self):
         """
         Compute the log prior probability of the model parameters
@@ -292,10 +251,8 @@ class HMM(object):
         """
         ll = 0
         for data, input, mask, tag in zip(datas, inputs, masks, tags):
-            pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-            Ps = self.transitions.transition_matrices(data, input, mask, tag)
-            log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-            ll += hmm_normalizer(pi0, Ps, log_likes)
+            posterior = HMMExactPosterior(self, data, input, mask, tag)
+            ll += posterior.marginal_likelihood
             assert np.isfinite(ll)
         return ll
 
@@ -303,52 +260,25 @@ class HMM(object):
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
         return self.log_likelihood(datas, inputs, masks, tags) + self.log_prior()
 
-    def expected_log_likelihood(
-            self, expectations, datas, inputs=None, masks=None, tags=None):
-        """
-        Compute log-likelihood given current model parameters.
-
-        :param datas: single array or list of arrays of data.
-        :return total log probability of the data.
-        """
-        ell = 0.0
-        for (Ez, Ezzp1, _), data, input, mask, tag in \
-                zip(expectations, datas, inputs, masks, tags):
-
-            pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-            log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
-            log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-
-            ell += np.sum(Ez[0] * np.log(pi0))
-            ell += np.sum(Ezzp1 * log_Ps)
-            ell += np.sum(Ez * log_likes)
-            assert np.isfinite(ell)
-
-        return ell
-
-    def expected_log_probability(
-            self, expectations, datas, inputs=None, masks=None, tags=None):
-        """
-        Compute the log-probability of the data given current
-        model parameters.
-        """
-        ell = self.expected_log_likelihood(
-            expectations, datas, inputs=inputs, masks=masks, tags=tags)
-        return ell + self.log_prior()
-
     # Model fitting
-    def _fit_sgd(self, optimizer, datas, inputs, masks, tags, num_iters=1000, **kwargs):
+    def _fit_sgd(self, optimizer, posteriors, datas, inputs, masks, tags, num_iters=1000, **kwargs):
         """
         Fit the model with maximum marginal likelihood.
         """
         T = sum([data.shape[0] for data in datas])
         def _objective(params, itr):
-            self.params = params
-            obj = self.log_probability(datas, inputs, masks, tags)
+            self.init_state_distn.params = params[0]
+            self.transitions.params = params[1]
+            self.observations.params = params[2]
+
+            obj = self.log_prior()
+            for posterior in posteriors:
+                obj += posterior.marginal_likelihood
             return -obj / T
 
         # Set up the progress bar
-        lls = [-_objective(self.params, 0) * T]
+        init_params = (self.init_state_distn.params, self.transitions.params, self.observations.params)
+        lls = [-_objective(init_params, 0) * T]
         pbar = trange(num_iters)
         pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(0, 0, lls[-1]))
 
@@ -356,73 +286,18 @@ class HMM(object):
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
         state = None
         for itr in pbar:
-            self.params, val, g, state = step(value_and_grad(_objective), self.params, itr, state, **kwargs)
+            init_params = (self.init_state_distn.params, self.transitions.params, self.observations.params)
+            params, val, g, state = step(value_and_grad(_objective), init_params, itr, state, **kwargs)
+            self.init_state_distn.params, self.transitions.params, self.observations.params = params
+
             lls.append(-val * T)
             pbar.set_description("LP: {:.1f}".format(lls[-1]))
             pbar.update(1)
 
         return lls
 
-    def _fit_stochastic_em(self, optimizer, datas, inputs, masks, tags, num_epochs=100, **kwargs):
-        """
-        Replace the M-step of EM with a stochastic gradient update using the ELBO computed
-        on a minibatch of data.
-        """
-        M = len(datas)
-        T = sum([data.shape[0] for data in datas])
-
-        # A helper to grab a minibatch of data
-        perm = [np.random.permutation(M) for _ in range(num_epochs)]
-        def _get_minibatch(itr):
-            epoch = itr // M
-            m = itr % M
-            i = perm[epoch][m]
-            return datas[i], inputs[i], masks[i], tags[i][i]
-
-        # Define the objective (negative ELBO)
-        def _objective(params, itr):
-            # Grab a minibatch of data
-            data, input, mask, tag = _get_minibatch(itr)
-            Ti = data.shape[0]
-
-            # E step: compute expected latent states with current parameters
-            Ez, Ezzp1, _ = self.expected_states(data, input, mask, tag)
-
-            # M step: set the parameter and compute the (normalized) objective function
-            self.params = params
-            pi0 = self.init_state_distn.initial_state_distn(data, input, mask, tag)
-            log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
-            log_likes = self.observations.log_likelihoods(data, input, mask, tag)
-
-            # Compute the expected log probability
-            # (Scale by number of length of this minibatch.)
-            obj = self.log_prior()
-            obj += np.sum(Ez[0] * np.log(pi0)) * M
-            obj += np.sum(Ezzp1 * log_Ps) * (T - M) / (Ti - 1)
-            obj += np.sum(Ez * log_likes) * T / Ti
-            assert np.isfinite(obj)
-
-            return -obj / T
-
-        # Set up the progress bar
-        lls = [-_objective(self.params, 0) * T]
-        pbar = trange(num_epochs * M)
-        pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(0, 0, lls[-1]))
-
-        # Run the optimizer
-        step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
-        state = None
-        for itr in pbar:
-            self.params, val, g, state = step(value_and_grad(_objective), self.params, itr, state, **kwargs)
-            epoch = itr // M
-            m = itr % M
-            lls.append(-val * T)
-            pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(epoch, m, lls[-1]))
-            pbar.update(1)
-
-        return lls
-
-    def _fit_em(self, datas, inputs, masks, tags, num_em_iters=100, tolerance=0,
+    def _fit_em(self, posteriors, datas, inputs, masks, tags,
+                num_em_iters=100, tolerance=0,
                 init_state_mstep_kwargs={},
                 transitions_mstep_kwargs={},
                 observations_mstep_kwargs={}):
@@ -432,23 +307,23 @@ class HMM(object):
         E step: compute E[z_t] and E[z_t, z_{t+1}] with message passing;
         M-step: analytical maximization of E_{p(z | x)} [log p(x, z; theta)].
         """
-        lls = [self.log_probability(datas, inputs, masks, tags)]
+        # Run one E step to start
+        expectations = [posterior.expectations for posterior in posteriors]
+        lls = [self.log_prior() + sum(ll for _, _, ll in expectations)]
 
         pbar = trange(num_em_iters)
         pbar.set_description("LP: {:.1f}".format(lls[-1]))
         for itr in pbar:
-            # E step: compute expected latent states with current parameters
-            expectations = [self.expected_states(data, input, mask, tag)
-                            for data, input, mask, tag,
-                            in zip(datas, inputs, masks, tags)]
-
             # M step: maximize expected log joint wrt parameters
             self.init_state_distn.m_step(expectations, datas, inputs, masks, tags, **init_state_mstep_kwargs)
             self.transitions.m_step(expectations, datas, inputs, masks, tags, **transitions_mstep_kwargs)
             self.observations.m_step(expectations, datas, inputs, masks, tags, **observations_mstep_kwargs)
 
+            # E step: compute expected latent states under the posterior
+            expectations = [posterior.expectations for posterior in posteriors]
+            lls.append(self.log_prior() + sum(ll for _, _, ll in expectations))
+
             # Store progress
-            lls.append(self.log_prior() + sum([ll for (_, _, ll) in expectations]))
             pbar.set_description("LP: {:.1f}".format(lls[-1]))
 
             # Check for convergence
@@ -460,24 +335,63 @@ class HMM(object):
 
     @ensure_args_are_lists
     def fit(self, datas, inputs=None, masks=None, tags=None,
-            method="em", initialize=True, **kwargs):
+            method="em", posterior="exact", initialize=True, **kwargs):
         _fitting_methods = \
             dict(sgd=partial(self._fit_sgd, "sgd"),
                  adam=partial(self._fit_sgd, "adam"),
                  em=self._fit_em,
-                 stochastic_em=partial(self._fit_stochastic_em, "adam"),
-                 stochastic_em_sgd=partial(self._fit_stochastic_em, "sgd"),
                  )
 
+        # Initialize the parameters
+        if initialize:
+            self.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+
+        # Construct the posterior objects
+        _posterior_classes = \
+            dict(exact=HMMExactPosterior)
+
+        if posterior not in _posterior_classes:
+            raise Exception("Invalid posterior: {}. Options are {}".
+                            format(posterior, _posterior_classes.keys()))
+
+        posteriors = [_posterior_classes[posterior](self, data, input, mask, tag)
+                      for data, input, mask, tag in
+                      zip(datas, inputs, masks, tags)]
+
+        # Run the appropriate fitting method
         if method not in _fitting_methods:
             raise Exception("Invalid method: {}. Options are {}".
                             format(method, _fitting_methods.keys()))
 
-        if initialize:
-            self.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+        lls = _fitting_methods[method](posteriors, datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
 
-        return _fitting_methods[method](datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
+        if len(posteriors) == 1:
+            return lls, posteriors[0]
+        else:
+            return lls, posteriors
 
+
+    @ensure_args_are_lists
+    def infer(self, datas, inputs=None, masks=None, tags=None, posterior="exact", **kwargs):
+        """
+        Infer the posterior distribution over data given fixed model parameters.
+        """
+        # Construct the posterior objects
+        _posterior_classes = \
+            dict(exact=HMMExactPosterior)
+
+        if posterior not in _posterior_classes:
+            raise Exception("Invalid posterior: {}. Options are {}".
+                            format(posterior, _posterior_classes.keys()))
+
+        posteriors = [_posterior_classes[posterior](self, data, input, mask, tag)
+                for data, input, mask, tag in
+                zip(datas, inputs, masks, tags)]
+
+        if len(posteriors) == 1:
+            return posteriors[0]
+        else:
+            return posteriors
 
 class HSMM(HMM):
     """

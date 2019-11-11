@@ -3,8 +3,9 @@ import warnings
 
 import autograd.numpy as np
 import autograd.numpy.random as npr
+
+from autograd.scipy.special import gammaln, digamma, logsumexp
 from autograd.scipy.special import logsumexp
-from autograd.scipy.special import gammaln, digamma
 
 from ssm.util import random_rotation, ensure_args_are_lists, \
     logistic, logit, one_hot
@@ -13,7 +14,7 @@ from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 import ssm.stats as stats
-
+import ssm.regression as regression
 
 class Observations(object):
 
@@ -586,6 +587,180 @@ class PoissonObservations(Observations):
         return expectations.dot(np.exp(self.log_lambdas))
 
 
+class PoissonGLMObservations(Observations):
+    """
+    Poisson observations with a GLM mapping from inputs to rates.
+
+    lambda_{n,t} = f(w_{z_t, n}^T x_t + b_{n, z_t}))
+
+    where
+
+    n:    neuron index
+    t:    time index
+    z_t:  discrete state at time t
+    x_t:  input at time t
+    """
+
+    def __init__(self, K, D, M=0, mean_function="softplus",
+                 weight_mean=0, weight_variance=1,
+                 init_m_steps=0, init_softmax_temp=1.0):
+        """
+        K:  number of discrete states
+        D:  number of neurons
+        M:  number of input dimensions
+        """
+        super(PoissonGLMObservations, self).__init__(K, D, M)
+        self.mean_function = mean_function
+        self.init_m_steps = init_m_steps
+        self.init_softmax_temp = init_softmax_temp
+
+        # Set the prior
+        self.weight_mean = weight_mean * np.ones(M + 1)
+        self.weight_var = weight_variance * np.eye(M + 1)
+
+        # Initialize weights
+        self.W = npr.randn(K, D, M) / (np.sqrt(M) * 3)
+        self.b = np.zeros((K, D))
+
+    @property
+    def params(self):
+        return (self.W, self.b)
+
+    @params.setter
+    def params(self, value):
+        self.W, self.b = value
+
+    def permute(self, perm):
+        self.W = self.W[perm]
+        self.b = self.b[perm]
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        """Initialize model with mixture of GLMs."""
+        if self.init_m_steps == 0:
+            return
+
+        # Initialize expectations.
+        expectations = []
+        K = self.W.shape[0]
+        for inp in inputs:
+            T = inp.shape[0]
+            ep = np.zeros((T, K))
+            # ep[np.arange(T), npr.randint(K, size=T)] = 1.0
+            ep = npr.exponential(size=(T, K))
+            ep /= np.sum(ep, axis=1, keepdims=True)
+            expectations.append((ep, None, None))
+
+        # Perform one m-step.
+        print('performing an initial m-step...')
+        self.m_step(expectations, datas, inputs, masks, tags)
+
+        # Perform more m-steps.
+        for _ in range(self.init_m_steps - 1):
+            expectations = []
+            for d, inp, m, tg in zip(datas, inputs, masks, tags):
+                lls = self.init_softmax_temp * self.log_likelihoods(d, inp, m, tg)
+                ep = np.exp(lls - logsumexp(lls, axis=-1, keepdims=True))
+                expectations.append((ep, None, None))
+
+            print('performing an initial m-step...')
+            self.m_step(expectations, datas, inputs, masks, tags)
+
+    def log_likelihoods(self, data, input, mask, tag):
+        # inputs:   (T, M)
+        # data:     (T, D)
+        # weights:  (K, D, M)
+        # biases:   (K, D)
+        # lambdas:  (T, K, D)
+        # lls:      (T, K)
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('tm,kdm->tkd', input, self.W) + self.b[None, :, :])
+        mask = np.ones_like(data, dtype=bool) if mask is None else mask
+        return stats.poisson_logpdf(data[:, None, :], lambdas, mask=mask[:, None, :])
+
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('m,kdm->kd', input, self.W) + self.b)
+        return npr.poisson(lambdas[z])
+
+    def m_step(self, *args, **kwargs):
+        return self._fast_m_step(*args, **kwargs)
+
+    def _slow_m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        Xs = np.row_stack(inputs)
+        ys = np.row_stack(datas)
+
+        for k in range(self.K):
+            for d in range(self.D):
+                self.W[k, d], self.b[k, d] = \
+                    regression.fit_scalar_glm(Xs, ys[:, d], weights=weights[:, k],
+                        model="poisson", mean_function=self.mean_function, fit_intercept=True,
+                        prior=(self.weight_mean, self.weight_var),
+                        initial_theta=np.concatenate((self.W[k, d], [self.b[k, d]])))
+
+                assert np.all(np.isfinite(self.W))
+                assert np.all(np.isfinite(self.b))
+
+    def _fast_m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        X = np.row_stack(inputs)  # (timesteps x n_inputs)
+        Y = np.row_stack(datas)   # (timesteps x n_units)
+
+        # Add bias term.
+        nt = X.shape[0]
+        X = np.column_stack([X, np.ones(nt)])
+
+        for k in range(self.K):
+            Wk = np.column_stack([self.W[k], self.b[k]]) # (n_units x n_inputs)
+            z = weights[:, k]
+
+            Xw = X @ Wk.T           # timesteps x units
+            exp_Xw = np.exp(Xw)     # timesteps x units
+
+            losses = np.squeeze(z[None, :] @ (exp_Xw - Y * Xw))  # units
+
+            zX = z[:, None] * X
+            grads = (exp_Xw - Y).T @ zX  # units x inputs
+
+            # units x inputs x inputs
+            hess = np.einsum("ij,ihk->kjh", X, exp_Xw[:, None, :] * zX[:, :, None])
+            dWk = np.linalg.solve(hess, grads)
+
+            for n in range(self.D):
+                ss = 1.0
+                converged = False
+
+                while (not converged) and (ss > 1e-7):
+                    Wnew = Wk[n] - (ss * dWk[n])
+                    _Xw = X @ Wnew
+                    _eXw = np.exp(_Xw)
+                    newloss = z @ (_eXw - Y[:, n] * _Xw)
+
+                    if newloss < losses[n]:
+                        self.W[k, n] = Wnew[:-1]
+                        self.b[k, n] = Wnew[-1]
+                        converged = True
+                    else:
+                        ss *= .5
+
+                if not converged:
+                    # print("warn: failed to converge.")
+                    break
+
+                assert np.all(np.isfinite(self.W))
+                assert np.all(np.isfinite(self.b))
+
+    def smooth(self, expectations, data, input, tag):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        f = regression.mean_functions[self.mean_function]
+        lambdas = f(np.einsum('tm,kdm->tkd', input, self.W) + self.b[None, :, :])
+        return np.sum(expectations[:, :, None] * lambdas, axis=1)
+
+
 class CategoricalObservations(Observations):
 
     def __init__(self, K, D, M=0, C=2):
@@ -694,7 +869,7 @@ class _AutoRegressiveObservationsBase(Observations):
         mus = []
         for k, (A, b, V, mu0) in enumerate(zip(As, bs, Vs, mu0s)):
             # Initial condition
-            mus_k_init = mu0 * np.zeros((self.lags, D))
+            mus_k_init = mu0 * np.ones((self.lags, D))
 
             # Subsequent means are determined by the AR process
             mus_k_ar = np.dot(input[self.lags:, :M], V.T)

@@ -44,14 +44,14 @@ for obs in observations:
     for method in methods:
         print("Fitting {} HMM with {}".format(obs, method))
         model = ssm.HMM(K, D, observations=obs)
-        train_lls = model.fit(y, method=method)
-        test_ll = model.log_likelihood(y_test)
-        smoothed_y = model.smooth(y)
+        train_lls, train_posteriors = model.fit(y, method=method)
+        full_posterior = model.infer(y)
+        smoothed_z = full_posterior.mode
+        smoothed_y = full_posterior.denoise()
 
         # Permute to match the true states
-        model.permute(find_permutation(z, model.most_likely_states(y)))
-        smoothed_z = model.most_likely_states(y)
-        results[(obs, method)] = (model, train_lls, test_ll, smoothed_z, smoothed_y)
+        model.permute(find_permutation(z, full_posterior.mode))
+        results[(obs, method)] = (model, train_lls, smoothed_z, smoothed_y)
 
 # Plot the inferred states
 fig, axs = plt.subplots(len(observations) + 1, 1, figsize=(12, 8))
@@ -66,7 +66,7 @@ plt.xticks()
 for i, obs in enumerate(observations):
     zs = []
     for method, ls in zip(methods, ['-', ':']):
-        _, _, _, smoothed_z, _ = results[(obs, method)]
+        _, _, smoothed_z, _ = results[(obs, method)]
         zs.append(smoothed_z)
 
     plt.sca(axs[i+1])
@@ -93,7 +93,7 @@ for d in range(D):
 for obs in observations:
     line = None
     for method, ls in zip(methods, ['-', ':']):
-        _, _, _, _, smoothed_y = results[(obs, method)]
+        _, _, _, smoothed_y = results[(obs, method)]
         for d in range(D):
             plt.sca(axs[d])
             color = line.get_color() if line is not None else None
@@ -109,7 +109,7 @@ plt.figure(figsize=(12, 8))
 for obs in observations:
     line = None
     for method, ls in zip(methods, ['-', ':']):
-        _, lls, _, _, _ = results[(obs, method)]
+        _, lls, _, _ = results[(obs, method)]
         color = line.get_color() if line is not None else None
         line = plt.plot(lls, ls=ls, lw=1, color=color, label="{}({})".format(obs, method))[0]
 
@@ -119,13 +119,3 @@ plt.xlim(xlim)
 
 plt.legend(loc="lower right")
 plt.tight_layout()
-
-# Print the test log likelihoods
-print("Test log likelihood")
-print("True: ", true_hmm.log_likelihood(y_test))
-for obs in observations:
-    for method in methods:
-        _, _, test_ll, _, _ = results[(obs, method)]
-        print("{} ({}): {}".format(obs, method, test_ll))
-
-plt.show()

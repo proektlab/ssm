@@ -1,9 +1,9 @@
-
+#!/usr/bin/env python
 # coding: utf-8
 
 # # Start with a simple Hidden Markov Model
 
-# In[29]:
+# In[1]:
 
 
 import autograd.numpy as np
@@ -74,7 +74,7 @@ tag = None
 lls = true_hmm.observations.log_likelihoods(data, input, mask, tag)
 
 
-# In[36]:
+# In[5]:
 
 
 plt.figure(figsize=(6, 6))
@@ -91,7 +91,7 @@ if save_figures:
     plt.savefig("hmm_1.pdf")
 
 
-# In[35]:
+# In[6]:
 
 
 # Plot the data and the smoothed data
@@ -123,7 +123,7 @@ if save_figures:
 
 N_iters = 50
 hmm = ssm.HMM(K, D, observations="gaussian")
-hmm_lls = hmm.fit(y, method="em", num_em_iters=N_iters)
+hmm_lls, hmm_posterior = hmm.fit(y, method="em", num_em_iters=N_iters)
 
 plt.plot(hmm_lls, label="EM")
 plt.plot([0, N_iters], true_ll * np.ones(2), ':k', label="True")
@@ -136,14 +136,14 @@ plt.legend(loc="lower right")
 
 
 # Find a permutation of the states that best matches the true and inferred states
-hmm.permute(find_permutation(z, hmm.most_likely_states(y)))
+hmm.permute(find_permutation(z, hmm_posterior.mode))
 
 
-# In[11]:
+# In[9]:
 
 
 # Plot the true and inferred discrete states
-hmm_z = hmm.most_likely_states(y)
+hmm_z = hmm_posterior.mode
 
 plt.figure(figsize=(8, 4))
 plt.subplot(211)
@@ -162,15 +162,16 @@ plt.xlabel("time")
 plt.tight_layout()
 
 
-# In[34]:
+# In[10]:
 
 
 # Use the HMM to "smooth" the data
-hmm_y = hmm.smooth(y)
+hmm_y = hmm_posterior.denoise()
 
+spc = 5
 plt.figure(figsize=(8, 4))
-plt.plot(y + 3 * np.arange(D), '-k', lw=2)
-plt.plot(hmm_y + 3 * np.arange(D), '-', lw=2)
+plt.plot(y + spc * np.arange(D), '-k', lw=2)
+plt.plot(hmm_y + spc * np.arange(D), '-', lw=2)
 plt.xlim(0, T)
 plt.ylabel("$y$")
 # plt.yticks([])
