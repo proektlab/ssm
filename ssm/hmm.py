@@ -33,11 +33,11 @@ class HMM(object):
     In the code we will sometimes refer to the discrete
     latent state sequence as z and the data as x.
     """
-    def __init__(self, K, D, M=0, init_state_distn=None,
-                 transitions='standard',
+    def __init__(self, K, D, M=6, init_state_distn=None,
+                 transitions="inputdriven",
                  transition_kwargs=None,
                  hierarchical_transition_tags=None,
-                 observations="gaussian", observation_kwargs=None,
+                 observations="input_driven_obs", observation_kwargs=None,
                  hierarchical_observation_tags=None, **kwargs):
 
         # Make the initial state distribution
@@ -156,7 +156,7 @@ class HMM(object):
         self.transitions.permute(perm)
         self.observations.permute(perm)
 
-    def sample(self, T, prefix=None, input=None, tag=None, with_noise=True):
+    def sample(self, T, output, prefix=None, input=None, tag=None, with_noise=True, rnn=False):
         """
         Sample synthetic data from the model. Optionally, condition on a given
         prefix (preceding discrete states and data).
@@ -206,42 +206,90 @@ class HMM(object):
             dummy_data = self.observations.sample_x(0, np.empty(0, ) + D)
             dtype = dummy_data.dtype
 
-        # fit the data array
-        if prefix is None:
-            # No prefix is given.  Sample the initial state as the prefix.
+        if rnn == False:
+            # fit the data array
+            if prefix is None:
+                # No prefix is given.  Sample the initial state as the prefix.
+                pad = 1
+                z = np.zeros(T, dtype=int)
+                data = np.zeros((T,) + D, dtype=dtype)
+                input = np.zeros((T,) + M) if input is None else input
+                mask = np.ones((T,) + D, dtype=bool)
+
+                # Sample the first state from the initial distribution
+                pi0 = self.init_state_distn.initial_state_distn
+                z[0] = npr.choice(self.K, p=pi0)
+                data[0] = self.observations.sample_x(z[0], data[:0], input=input[0], with_noise=with_noise)
+                if data[0] == [0]:
+                    input[1, 4] = -1
+                else:
+                    input[1, 4] = 1
+
+                # We only need to sample T-1 datapoints now
+                T = T - 1
+
+            else:
+                # Check that the prefix is of the right type
+                zpre, xpre = prefix
+                pad = len(zpre)
+                assert zpre.dtype == int and zpre.min() >= 0 and zpre.max() < K
+                assert xpre.shape == (pad,) + D
+
+                # Construct the states, data, inputs, and mask arrays
+                z = np.concatenate((zpre, np.zeros(T, dtype=int)))
+                data = output
+                input = np.zeros((T+pad,) + M) if input is None else np.concatenate((np.zeros((pad,) + M), input))
+                mask = np.ones((T+pad,) + D, dtype=bool)
+
+            # Fill in the rest of the data
+            for t in range(pad, pad+T):
+                Pt = self.transitions.transition_matrices(data[t-1:t+1], input[t-1:t+1], mask=mask[t-1:t+1], tag=tag)[0]
+                z[t] = npr.choice(self.K, p=Pt[z[t-1]])
+                data[t] = self.observations.sample_x(z[t], data[:t], input=input[t], tag=tag,
+                                                     with_noise=with_noise)
+                if t < pad+T-1:
+                    if data[t] == [0]:
+                        input[t+1, 4] = -1
+                    else:
+                        input[t+1, 4] = 1
+        else:
             pad = 1
             z = np.zeros(T, dtype=int)
-            data = np.zeros((T,) + D, dtype=dtype)
+            data = output
             input = np.zeros((T,) + M) if input is None else input
             mask = np.ones((T,) + D, dtype=bool)
 
             # Sample the first state from the initial distribution
             pi0 = self.init_state_distn.initial_state_distn
             z[0] = npr.choice(self.K, p=pi0)
-            data[0] = self.observations.sample_x(z[0], data[:0], input=input[0], with_noise=with_noise)
+
+            if data[0] == [1]:
+                data[0] = [1]
+                input[1, 4] = -1
+            else:
+                data[0] = [0]
+                input[1, 4] = 1
 
             # We only need to sample T-1 datapoints now
             T = T - 1
 
-        else:
-            # Check that the prefix is of the right type
-            zpre, xpre = prefix
-            pad = len(zpre)
-            assert zpre.dtype == int and zpre.min() >= 0 and zpre.max() < K
-            assert xpre.shape == (pad,) + D
+            # Fill in the rest of the data
+            for t in range(pad, pad + T):
+                Pt = self.transitions.transition_matrices(data[t - 1:t + 1], input[t - 1:t + 1], mask=mask[t - 1:t + 1], tag=tag)[0]
+                z[t] = npr.choice(self.K, p=Pt[z[t - 1]])
 
-            # Construct the states, data, inputs, and mask arrays
-            z = np.concatenate((zpre, np.zeros(T, dtype=int)))
-            data = np.concatenate((xpre, np.zeros((T,) + D, dtype)))
-            input = np.zeros((T+pad,) + M) if input is None else np.concatenate((np.zeros((pad,) + M), input))
-            mask = np.ones((T+pad,) + D, dtype=bool)
+                if t < pad + T - 1:
+                    if data[t] == [1]:
+                        data[t] = [1]
+                        input[t + 1, 4] = -1
+                    else:
+                        data[t] = [0]
+                        input[t + 1, 4] = 1
 
-        # Fill in the rest of the data
-        for t in range(pad, pad+T):
-            Pt = self.transitions.transition_matrices(data[t-1:t+1], input[t-1:t+1], mask=mask[t-1:t+1], tag=tag)[0]
-            z[t] = npr.choice(self.K, p=Pt[z[t-1]])
-            data[t] = self.observations.sample_x(z[t], data[:t], input=input[t], tag=tag,
-                                                 with_noise=with_noise)
+            if data[T] == [1]:
+                data[T] = [1]
+            else:
+                data[T] = [0]
 
         # Return the whole data if no prefix is given.
         # Otherwise, just return the simulated part.
@@ -263,6 +311,7 @@ class HMM(object):
         Ps = self.transitions.transition_matrices(data, input, mask, tag)
         log_likes = self.observations.log_likelihoods(data, input, mask, tag)
         return viterbi(pi0, Ps, log_likes)
+        # most likely state sequence for a sequence of observations
 
     @ensure_args_not_none
     def filter(self, data, input=None, mask=None, tag=None):
@@ -591,7 +640,7 @@ class HSMM(HMM):
     def state_map(self):
         return self.transitions.state_map
 
-    def sample(self, T, prefix=None, input=None, tag=None, with_noise=True):
+    def sample(self, T, prefix=None, input = None, tag=None, with_noise=True):
         """
         Sample synthetic data from the model. Optionally, condition on a given
         prefix (preceding discrete states and data).

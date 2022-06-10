@@ -14,13 +14,13 @@ LOG_EPS = 1e-16
 DIV_EPS = 1e-16
 
 def compute_state_overlap(z1, z2, K1=None, K2=None):
+    # print(z1)
+    # print(z2)
     assert z1.dtype == int and z2.dtype == int
     assert z1.shape == z2.shape
     assert z1.min() >= 0 and z2.min() >= 0
-
     K1 = z1.max() + 1 if K1 is None else K1
     K2 = z2.max() + 1 if K2 is None else K2
-
     overlap = np.zeros((K1, K2))
     for k1 in range(K1):
         for k2 in range(K2):
@@ -33,6 +33,8 @@ def find_permutation(z1, z2, K1=None, K2=None):
     K1, K2 = overlap.shape
 
     tmp, perm = linear_sum_assignment(-overlap)
+    # print(str(tmp))
+    # print(str(perm))
     assert np.all(tmp == np.arange(K1)), "All indices should have been matched!"
 
     # Pad permutation if K1 < K2

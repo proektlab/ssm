@@ -20,7 +20,7 @@ class Observations(object):
     # D = number of observed dimensions
     # M = exogenous input dimensions (the inputs modulate the probability of discrete state transitions via a multiclass logistic regression)
 
-    def __init__(self, K, D, M=0):
+    def __init__(self, K, D, M=6):
         self.K, self.D, self.M = K, D, M
 
     @property
@@ -628,7 +628,7 @@ class CategoricalObservations(Observations):
 
 class InputDrivenObservations(Observations):
 
-    def __init__(self, K, D, M=0, C=2, prior_mean = 0, prior_sigma=1000):
+    def __init__(self, K, D, M=6, C=2, prior_mean = 0, prior_sigma=1000):
         """
         @param K: number of states
         @param D: dimensionality of output
@@ -696,11 +696,13 @@ class InputDrivenObservations(Observations):
             input = np.expand_dims(input, axis=0)
         time_dependent_logits = self.calculate_logits(input)  # size TxKxC
         ps = np.exp(time_dependent_logits)
+        # print(ps)
         T = time_dependent_logits.shape[0]
         if T == 1:
             sample = np.array([npr.choice(self.C, p=ps[t, z]) for t in range(T)])
         elif T > 1:
             sample = np.array([npr.choice(self.C, p=ps[t, z[t]]) for t in range(T)])
+        # print(sample)
         return sample
 
     def m_step(self, expectations, datas, inputs, masks, tags, optimizer = "bfgs", **kwargs):

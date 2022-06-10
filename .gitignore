@@ -116,3 +116,9 @@ notebooks/*.html
 .vscode
 
 .DS_Store
+
+rnn_data/
+
+figures/
+
+.idea/

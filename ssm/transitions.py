@@ -231,6 +231,7 @@ class InputDrivenTransitions(StickyTransitions):
 
     @params.setter
     def params(self, value):
+        print(value)
         self.log_Ps, self.Ws = value
 
     def permute(self, perm):
@@ -246,12 +247,14 @@ class InputDrivenTransitions(StickyTransitions):
         return lp
 
     def log_transition_matrices(self, data, input, mask, tag):
+        print("hello")
         T = data.shape[0]
         assert input.shape[0] == T
         # Previous state effect
         log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
         log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
+        print(log_Ps)
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
