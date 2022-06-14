@@ -709,10 +709,10 @@ class InputDrivenObservations(Observations):
         self.M = M
         self.D = D
         self.K = K
-        self.prior_mean = prior_mean
         self.prior_sigma = prior_sigma
         # Parameters linking input to distribution over output classes
         self.Wk = npr.randn(K, C - 1, M)
+        self.prior_mean = np.broadcast_to(prior_mean, self.Wk.shape)
 
     @property
     def params(self):
@@ -730,11 +730,10 @@ class InputDrivenObservations(Observations):
         for k in range(self.K):
             for c in range(self.C - 1):
                 weights = self.Wk[k][c]
-                lp += stats.multivariate_normal_logpdf(weights, mus=np.repeat(
-                    self.prior_mean, (self.M)),
-                                                       Sigmas=((
-                                                                   self.prior_sigma) ** 2) * np.identity(
-                                                           self.M))
+                prior_mean = self.prior_mean[k][c]
+                lp += stats.multivariate_normal_logpdf(
+                    weights, mus=prior_mean,
+                    Sigmas=((self.prior_sigma) ** 2) * np.identity(self.M))
         return lp
 
     # Calculate time dependent logits - output is matrix of size TxKxC
