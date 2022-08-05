@@ -33,8 +33,6 @@ def find_permutation(z1, z2, K1=None, K2=None):
     K1, K2 = overlap.shape
 
     tmp, perm = linear_sum_assignment(-overlap)
-    # print(str(tmp))
-    # print(str(perm))
     assert np.all(tmp == np.arange(K1)), "All indices should have been matched!"
 
     # Pad permutation if K1 < K2

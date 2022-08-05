@@ -7,7 +7,6 @@ import sys
 import itertools
 import math
 import time
-import os
 
 npr.seed(0)
 
@@ -43,51 +42,13 @@ def cond_entropy(true_latent, likely_latent, trials, num_states):
                     arr[1] += 1
                 elif likely_latent[t] == 2:
                     arr[2] += 1
-        prob = count / trials
+        prob = count/trials
         arr /= count
         for k in range(num_states):
             if arr[k] != 0:
                 cond_ent[i] += arr[k] * math.log2(arr[k])
         sum -= prob * cond_ent[i]
     return sum
-
-
-def closest_switch(true_latent, likely_latent, trials):
-    dists = []
-    seq = []
-    curr = true_latent[0]
-    i = 1
-    while i in range(trials):
-        if curr != true_latent[i]:
-            start = true_latent[i-1]
-            change = true_latent[i]
-            j = i
-            k = i - 2
-            while j < trials or k >= 0:
-                if j < trials and likely_latent[j] == change and likely_latent[j-1] == start:
-                    if i-j > -70:
-                        dists.append(i-j)
-                    if i-j > -4:
-                        seq.append(1)
-                    else:
-                        seq.append(0)
-                    break
-                elif k >= 0 and likely_latent[k] == change and likely_latent[k+1] == start:
-                    if i-k < 70:
-                        dists.append(i-k)
-                    if i-k < 4:
-                        seq.append(1)
-                    else:
-                        seq.append(0)
-                    break
-                else:
-                    j += 1
-                    k -= 1
-        else:
-            seq.append(-1)
-        i += 1
-        curr = true_latent[i-1]
-    return dists, seq
 
 
 def glmhmm():
@@ -110,7 +71,7 @@ def glmhmm():
                             [[1 / ((1 / 2) + np.exp(3 - (t / 2))), 1 / ((1 / 2) + np.exp(5 - (t / 2))),
                               1 / ((1 / 2) + np.exp(7 - (t / 2))), -2.5, 1, 0.2]]])
 
-    gen_log_trans_mat = np.log(np.array([[[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]]))
+    gen_log_trans_mat = np.log(np.array([[[0.98, 0.01, 0.01], [0.01, 0.98, 0.01], [0.01, 0.01, 0.98]]]))
 
     true_glmhmm.observations.params = gen_weights
     true_glmhmm.transitions.params = gen_log_trans_mat
@@ -147,7 +108,7 @@ def glmhmm():
     plt.xlabel("state t+1", fontsize=15)
     plt.title("Generative transition matrix", fontsize=15)
 
-    num_sess = 42  # number of example sessions
+    num_sess = 45  # number of example sessions
     num_trials_per_sess = 204  # number of trials in a session
 
     inpts = np.ones((num_sess, num_trials_per_sess, input_dim))  # initialize inpts array
@@ -421,9 +382,6 @@ def glmhmm():
     base = time.time()
     map_mut_info = []
     prior_mut_info = []
-    map_dists = []
-    prior_dists = []
-    trans_dist = []
 
     for w in reversed(range(windows)):
         epochs[w, 0] = time.time() - base
@@ -439,8 +397,7 @@ def glmhmm():
                              transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
         prior_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
-                               observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma,
-                                                       prior_mean=prior_mean),
+                               observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma, prior_mean=prior_mean),
                                transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
         inpt_temp = np.array(all_inpts[start:end, :], dtype=int)
@@ -452,7 +409,6 @@ def glmhmm():
         _ = prior_glmhmm.fit(choice_temp, inputs=inpt_temp, method="em", num_iters=N_iters, tolerance=10 ** -4)
 
         # map_final_ll = map_glmhmm.log_likelihood(true_choices, inputs=inpts)
-
         try:
             map_glmhmm.permute(
                 find_permutation(latent_temp, map_glmhmm.most_likely_states(choice_temp, input=inpt_temp), 3, 3))
@@ -461,13 +417,9 @@ def glmhmm():
             latent_entropy = entropy(latent_temp, window, num_states)
             map_entropy = entropy(map_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window, num_states)
             map_norm = map_entropy + latent_entropy
-            map_mutual_info = map_entropy - (
-                cond_entropy(latent_temp, map_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window,
-                         num_states))
+            map_mutual_info = map_entropy - (cond_entropy(latent_temp, map_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window, num_states))
             map_mut_info.append(2 * map_mutual_info / map_norm)
 
-            dists, seqs = closest_switch(latent_temp, map_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window)
-            map_dists.extend(dists)
         except:
             map_mut_info.append(0)
             print("Error in map session " + str(w) + "!")
@@ -479,19 +431,8 @@ def glmhmm():
             # prior glmhmm mutual information
             prior_entropy = entropy(prior_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window, num_states)
             prior_norm = latent_entropy + prior_entropy
-            prior_mutual_info = prior_entropy - (
-                cond_entropy(latent_temp, prior_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window,
-                             num_states))
+            prior_mutual_info = prior_entropy - (cond_entropy(latent_temp, prior_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window, num_states))
             prior_mut_info.append(2 * prior_mutual_info / prior_norm)
-
-            prior_dist, prior_seq = closest_switch(latent_temp, prior_glmhmm.most_likely_states(choice_temp, input=inpt_temp), window)
-            prior_dists.extend(prior_dist)
-
-            for p in range(len(prior_seq)-1):
-                if prior_seq[p] == 0 and prior_seq[p+1] != 0:
-                    start = p
-                elif prior_seq[p] != 0 and prior_seq[p+1] == 0:
-                    trans_dist.append(p-start)
 
         except:
             prior_mut_info.append(0)
@@ -509,25 +450,26 @@ def glmhmm():
 
         epochs[w, 1] = time.time() - base
 
+        '''
         gen_weights_tot = np.zeros(num_states)
         rec_weights_tot = np.zeros(num_states)
-
+    
         for k in range(num_states):
             plt.plot(range(input_dim), gen_weight_arr[i][k][0], marker='o',
                      color=cols[k],
                      lw=1.5, label="", linestyle='-')
             plt.plot(range(input_dim), recovered_weights[k][0], color=cols[k],
                      lw=1.5, label='', linestyle='--')
-
+    
             for i in range(input_dim):
                 gen_weights_tot[k] += gen_weights[k][0][i]
                 rec_weights_tot[k] += recovered_weights[k][0][i]
-
+            
         plt.yticks(fontsize=10)
         plt.xticks([0, 1], ['', ''], fontsize=12, rotation=45)
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
         plt.title("MAP", fontsize=15)
-
+        
 
     for i in range(input_dim):
         fig = plt.figure(figsize=(6, 3), dpi=80, facecolor='w', edgecolor='k')
@@ -541,42 +483,6 @@ def glmhmm():
         plt.title("Smoothness", fontsize=15)
         plt.legend()
 
-    gen_weight_arr = np.array(gen_weight_arr)
-
-    for w in range(windows):
-        mnorm = abs(map_state_change[w, 0, 0, 0]) + abs(map_state_change[w, 0, 0, 1]) + abs(map_state_change[w, 0, 0, 2])
-        map_state_change[w, 0, 0, :] /= mnorm
-        pnorm = abs(prior_state_change[w, 0, 0, 0]) + abs(prior_state_change[w, 0, 0, 1]) + abs(prior_state_change[w, 0, 0, 2])
-        prior_state_change[w, 0, 0, :] /= pnorm
-        gnorm = abs(gen_weight_arr[w, 0, 0, 0]) + abs(gen_weight_arr[w, 0, 0, 1]) + abs(gen_weight_arr[w, 0, 0, 2])
-        gen_weight_arr[w, 0, 0, :] /= gnorm
-
-    for i in range(3):
-        fig = plt.figure(figsize=(6, 3), dpi=80, facecolor='w', edgecolor='k')
-        plt.plot(range(windows), map_state_change[:, 0, 0, i], marker='o', color=cols[0], lw=1.5, label="prior = 0",
-                 linestyle='--')
-        plt.plot(range(windows), prior_state_change[:, 0, 0, i], marker='o', color=cols[1], lw=1.5,
-                 label="prior = previous rec weights", linestyle='--')
-        plt.plot(range(windows), gen_weight_arr[0:windows, 0, 0, i], marker='o', color=cols[2], lw=1.5,
-                 label="generative", linestyle='-')
-        plt.xticks(np.arange(windows))
-        plt.title("Smoothness", fontsize=15)
-        plt.legend()
-
-    print(map_dists)
-    print(prior_dists)
-
-    fig = plt.figure(figsize=(6, 3), dpi=80, facecolor='w', edgecolor='k')
-    plt.hist(map_dists, label="prior = 0", bins=40)
-
-    fig = plt.figure(figsize=(6, 3), dpi=80, facecolor='w', edgecolor='k')
-    plt.hist(prior_dists, color=cols[0], label="prior = previous rec weights", bins=40)
-    plt.title("Spike Triggered Average", fontsize=15)
-
-    fig = plt.figure(figsize=(6, 3), dpi=80, facecolor='w', edgecolor='k')
-    plt.hist(trans_dist, label="prior = previous rec weights", bins=40)
-    plt.title("Distance Between Missed Transitions", fontsize=15)
-
     fig = plt.figure(figsize=(7, 3), dpi=80, facecolor='w', edgecolor='k')
     plt.plot(range(windows), np.flip(np.array(map_mut_info), axis=0), marker='o', color=cols[0], lw=1.5, label="prior = 0")
     plt.plot(range(windows), np.flip(np.array(prior_mut_info), axis=0), marker='o', color=cols[1], lw=1.5,
@@ -584,7 +490,9 @@ def glmhmm():
     plt.xticks(np.arange(windows))
     plt.title("Mutual Information", fontsize=15)
     plt.legend()
+
     '''
+        '''
      # Plot these values
     fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor='w', edgecolor='k')
     loglikelihood_vals = [true_likelihood, mle_final_ll, map_final_ll]
@@ -595,7 +503,7 @@ def glmhmm():
     plt.xticks([0, 1, 2], ['true', 'mle', 'map'], fontsize = 10)
     plt.xlabel('model', fontsize = 15)
     plt.ylabel('loglikelihood', fontsize=15)
-
+    
     plt.subplot(1,2,2)
     recovered_weights = map_glmhmm.observations.params
     gen_weights_tot = np.zeros(num_states)
@@ -613,14 +521,14 @@ def glmhmm():
     plt.xticks([0, 1], ['', ''], fontsize=12, rotation=45)
     plt.axhline(y=0, color="k", alpha=0.5, ls="--")
     plt.title("MAP", fontsize = 15)
-
+    
     gen_weights_mean = gen_weights_tot / input_dim
     rec_weights_mean = rec_weights_tot / input_dim
     numerator = np.zeros(num_states)
     gen_sd = np.zeros(num_states)
     rec_sd = np.zeros(num_states)
     corr = np.zeros(num_states)
-
+    
     for k in range(num_states):
         for i in range(input_dim):
             numerator[k] += (gen_weights[k][0][i] - gen_weights_mean[k]) * (
@@ -629,7 +537,7 @@ def glmhmm():
             rec_sd[k] += (recovered_weights[k][0][i] - rec_weights_mean[k]) ** 2
         corr[k] = numerator[k] / (math.sqrt(gen_sd[k] * rec_sd[k]))
         print("MAP: " + str(corr[k]))
-    '''
+    
     fig = plt.figure(figsize=(7, 2.5), dpi=80, facecolor='w', edgecolor='k')
     plt.subplot(1, 3, 1)
     gen_trans_mat = np.exp(gen_log_trans_mat)[0]
@@ -673,7 +581,7 @@ def glmhmm():
     plt.ylim(num_states - 0.5, -0.5)
     plt.title("recovered - MAP", fontsize=15)
     plt.subplots_adjust(0, 0, 1, 1)
-
+    '''
     # Create additional input sequences to be used as held-out test data
     num_test_sess = 1
     test_inpts = np.ones((num_test_sess, num_trials_per_sess, input_dim))
@@ -741,7 +649,34 @@ def glmhmm():
     plt.xlabel('model', fontsize=15)
     plt.ylabel('loglikelihood', fontsize=15)
 
-    plt.show()
+    plt.close('all')
+    # plt.show()
+
+    return map_recovered_weights, prior_rec_weights, map_transitions, \
+           prior_transitions, np.flip(np.array(map_mut_info)), np.flip(np.array(prior_mut_info)), epochs
 
 
-glmhmm()
+def multi_runs():
+    runs = 25
+    map_weights = np.array([])
+    prior_weights = np.array([])
+    map_trans = np.array([])
+    prior_trans = np.array([])
+    map_mut_info = np.array([])
+    prior_mut_info = np.array([])
+    all_epochs = np.array([])
+    for i in range(runs):
+        map_recovered_weights, prior_rec_weights, map_transitions, prior_transitions, map_mi, prior_mi, epochs = glmhmm()
+        all_epochs = np.append(all_epochs, epochs)
+        map_weights = np.append(map_weights, map_recovered_weights)
+        prior_weights = np.append(prior_weights, prior_rec_weights)
+        map_trans = np.append(map_trans, map_transitions)
+        map_mut_info = np.append(map_mut_info, map_mi)
+        prior_mut_info = np.append(prior_mut_info, prior_mi)
+        prior_trans = np.append(prior_trans, prior_transitions)
+    np.savez('Z:/kimliu/ssm/no_prior.npz', glm_weights=map_weights, transition_probs=map_trans, mut_info=map_mut_info)
+    np.savez('Z:/kimliu/ssm/weights_prior.npz', glm_weights=prior_weights, transition_probs=prior_trans, mut_info=prior_mut_info)
+    np.savez('Z:/kimliu/ssm/epochs.npz', epochs=epochs)
+
+
+multi_runs()
