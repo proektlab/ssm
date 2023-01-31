@@ -1,55 +1,32 @@
 import numpy as np
 import numpy.random as npr
 import matplotlib.pyplot as plt
-import ssm
-from ssm.util import find_permutation
+import ssm_customized
+from ssm_customized.util import find_permutation
 import sys
 import itertools
 import math
 import time
-import os
 
 npr.seed(0)
 
 
 def entropy(latent_states, trials, num_states):
-    entropy = 0
-    arr = np.zeros(num_states)
+    arr = np.ones(num_states) / trials   # initialize with 1 in each state to avoid -inf
     for t in range(trials):
-        if latent_states[t] == 0:
-            arr[0] += 1
-        elif latent_states[t] == 1:
-            arr[1] += 1
-        elif latent_states[t] == 2:
-            arr[2] += 1
-    arr /= trials
-    for i in range(num_states):
-        entropy -= (arr[i] * math.log2(arr[i]))
-    return entropy
+        arr[latent_states[t]] += 1/trials
+    return -sum(arr * np.log2(arr))
 
 
 def cond_entropy(true_latent, likely_latent, trials, num_states):
     cond_ent = np.zeros(num_states)
-    sum = 0
     for i in range(num_states):
-        arr = np.zeros(num_states)
-        count = 0
-        for t in range(trials):
-            if true_latent[t] == i:
-                count += 1
-                if likely_latent[t] == 0:
-                    arr[0] += 1
-                elif likely_latent[t] == 1:
-                    arr[1] += 1
-                elif likely_latent[t] == 2:
-                    arr[2] += 1
-        prob = count / trials
-        arr /= count
-        for k in range(num_states):
-            if arr[k] != 0:
-                cond_ent[i] += arr[k] * math.log2(arr[k])
-        sum -= prob * cond_ent[i]
-    return sum
+        in_state = true_latent == i
+        num_in_state = sum(in_state)
+        this_state_ent = entropy(likely_latent[in_state], num_in_state, num_states)
+        prob = num_in_state / trials
+        cond_ent[i] = prob * this_state_ent
+    return sum(cond_ent)
 
 
 def closest_switch(true_latent, likely_latent, trials):
@@ -90,17 +67,25 @@ def closest_switch(true_latent, likely_latent, trials):
     return dists, seq
 
 
-def glmhmm():
-    # Set the parameters of the GLM-HMM
-    num_states = 3  # number of discrete states
-    obs_dim = 1  # number of observed dimensions
-    num_categories = 2  # number of categories for output
-    input_dim = 6  # input dimensions
+def glmhmm(num_states=3, obs_dim=1, num_categories=2, input_dim=6):
+    """
+    Make a GLM-HMM.
+    Parameters
+    ----------
+    num_states: # of discrete states (strategies)
+    obs_dim: dimensionality of responses (1 for decision data)
+    num_categories: # of different possible responses
+    input_dim: # of factors that may affect the decision
+
+    Returns
+    -------
+
+    """
     t = 60  # session/window
     np.set_printoptions(threshold=sys.maxsize)
 
     # Make a GLM-HMM
-    true_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+    true_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                           observation_kwargs=dict(C=num_categories), transitions="standard")
 
     gen_weights = np.array([[[1 / ((1 / 6) + np.exp(3 - (t / 2))), 1 / ((1 / 6) + np.exp(5 - (t / 2))),
@@ -234,7 +219,7 @@ def glmhmm():
 
     N_iters = 200  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
 
-    new_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+    new_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                          observation_kwargs=dict(C=num_categories), transitions="standard")
 
     fit_ll = new_glmhmm.fit(true_choices, inputs=inpts, method="em", num_iters=N_iters, tolerance=10 ** -4)
@@ -434,11 +419,11 @@ def glmhmm():
         prior_alpha = 2
         prior_mean = recovered_weights
 
-        map_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+        map_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                              observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma, prior_mean=0),
                              transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
-        prior_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+        prior_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                                observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma,
                                                        prior_mean=prior_mean),
                                transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))

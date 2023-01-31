@@ -1,7 +1,7 @@
 # Test GLM-HMM with a mask for e.g. violation trials. Confirm that these trials
 # have no effect on final loglikelihood
 
-import ssm
+import ssm_customized
 import autograd.numpy as np
 import autograd.numpy.random as npr
 
@@ -34,7 +34,7 @@ def test_viol_mask():
     violation_idx = np.where(y == -1)[0]
     nonviolation_idx, mask = create_violation_mask(violation_idx,
                                                    inpt.shape[0])
-    this_hmm = ssm.HMM(K,
+    this_hmm = ssm_customized.HMM(K,
                        D,
                        M,
                        observations="input_driven_obs",

@@ -5,8 +5,8 @@ npr.seed(0)
 import matplotlib
 import matplotlib.pyplot as plt
 
-import ssm
-from ssm.util import random_rotation, find_permutation
+import ssm_customized
+from ssm_customized.util import random_rotation, find_permutation
 
 import seaborn as sns
 color_names = ["windows blue", "red", "amber", "faded green"]
@@ -21,7 +21,7 @@ D = 2       # number of latent dimensions
 N = 50      # number of observed dimensions
 
 # Make an SLDS with the true parameters
-true_slds = ssm.SLDS(N, K, D, emissions="bernoulli_orthog")
+true_slds = ssm_customized.SLDS(N, K, D, emissions="bernoulli_orthog")
 for k in range(K):
     true_slds.dynamics.As[k] = .95 * random_rotation(D, theta=(k+1) * np.pi/20)
     # true_slds.dynamics.bs[k] = .1 * npr.randn(D)
@@ -33,7 +33,7 @@ z_test, x_test, y_test = true_slds.sample(T)
 
 # Fit an SLDS with mean field posterior
 print("Fitting SLDS with SVI using structured variational posterior")
-slds = ssm.SLDS(N, K, D, emissions="bernoulli_orthog")
+slds = ssm_customized.SLDS(N, K, D, emissions="bernoulli_orthog")
 slds.initialize(y)
 q_mf_elbos, q_mf = slds.fit(y, method="bbvi",
                                variational_posterior="mf",
@@ -46,7 +46,7 @@ q_mf_z = slds.most_likely_states(q_mf_x, y)
 
 # Do the same with the structured posterior
 print("Fitting SLDS with SVI using structured variational posterior")
-slds = ssm.SLDS(N, K, D, emissions="bernoulli")
+slds = ssm_customized.SLDS(N, K, D, emissions="bernoulli")
 slds.initialize(y)
 q_struct_elbos, q_struct = slds.fit(y, method="bbvi",
                                variational_posterior="tridiag",
@@ -59,7 +59,7 @@ q_struct_z = slds.most_likely_states(q_struct_x, y)
 
 # Do the same with the structured posterior
 print("Fitting SLDS with Laplace-EM")
-slds = ssm.SLDS(N, K, D, emissions="bernoulli_orthog")
+slds = ssm_customized.SLDS(N, K, D, emissions="bernoulli_orthog")
 slds.initialize(y)
 q_lem_elbos, q_laplace_em = slds.fit(y, method="laplace_em",
                                variational_posterior="structured_meanfield",

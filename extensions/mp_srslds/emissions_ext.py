@@ -5,11 +5,11 @@ from autograd.scipy.linalg import block_diag
 
 from sklearn.decomposition import PCA
 
-from ssm.emissions import Emissions, _GaussianEmissionsMixin, _PoissonEmissionsMixin, \
+from ssm_customized.emissions import Emissions, _GaussianEmissionsMixin, _PoissonEmissionsMixin, \
     _LinearEmissions, _OrthogonalLinearEmissions, _NeuralNetworkEmissions, _BernoulliEmissionsMixin
-from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
+from ssm_customized.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, logistic, logit, softplus, inv_softplus
-from ssm.preprocessing import interpolate_data, pca_with_imputation
+from ssm_customized.preprocessing import interpolate_data, pca_with_imputation
 
 
 class _CompoundLinearEmissions(Emissions):

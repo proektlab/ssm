@@ -15,8 +15,8 @@ colors = sns.xkcd_palette(color_names)
 sns.set_style("white")
 sns.set_context("talk")
 
-import ssm
-from ssm.util import random_rotation
+import ssm_customized
+from ssm_customized.util import random_rotation
 
 # Global parameters
 T = 10000
@@ -103,7 +103,7 @@ def make_nascar_model():
     Rs = np.row_stack((100*w1, 100*w2, 10*w3,10*w4))
     r = np.concatenate((100*b1, 100*b2, 10*b3, 10*b4))
 
-    true_rslds = ssm.SLDS(D_obs, K, D_latent,
+    true_rslds = ssm_customized.SLDS(D_obs, K, D_latent,
                       transitions="recurrent_only",
                       dynamics="diagonal_gaussian",
                       emissions="gaussian_orthog",
@@ -125,7 +125,7 @@ true_rslds = make_nascar_model()
 z, x, y = true_rslds.sample(T=T)
 
 # Fit a robust rSLDS with its default initialization
-rslds_svi = ssm.SLDS(D_obs, K, D_latent,
+rslds_svi = ssm_customized.SLDS(D_obs, K, D_latent,
              transitions="recurrent_only",
              dynamics="diagonal_gaussian",
              emissions="gaussian_orthog",
@@ -144,7 +144,7 @@ xhat_svi = q_svi.mean[0]
 zhat_svi = rslds_svi.most_likely_states(xhat_svi, y)
 
 # Fit with Laplace EM
-rslds_lem = ssm.SLDS(D_obs, K, D_latent,
+rslds_lem = ssm_customized.SLDS(D_obs, K, D_latent,
              transitions="recurrent_only",
              dynamics="diagonal_gaussian",
              emissions="gaussian_orthog",

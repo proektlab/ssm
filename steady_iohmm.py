@@ -1,8 +1,8 @@
 import numpy as np
 import numpy.random as npr
 import matplotlib.pyplot as plt
-import ssm
-from ssm.util import find_permutation
+import ssm_customized
+from ssm_customized.util import find_permutation
 import sys
 import itertools
 import math
@@ -60,7 +60,7 @@ def glmHmm():
     np.set_printoptions(threshold=sys.maxsize)
 
     # Make a GLM-HMM
-    true_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+    true_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                           observation_kwargs=dict(C=num_categories), transitions="standard")
 
     gen_weights = np.array([[[1 / ((1 / 6) + np.exp(3 - (t / 2))), 1 / ((1 / 6) + np.exp(5 - (t / 2))),
@@ -169,7 +169,7 @@ def glmHmm():
 
     N_iters = 200  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
 
-    new_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+    new_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                          observation_kwargs=dict(C=num_categories), transitions="standard")
 
     fit_ll = new_glmhmm.fit(true_choices, inputs=inpts, method="em", num_iters=N_iters, tolerance=10 ** -4)
@@ -298,7 +298,7 @@ def glmHmm():
     # Instantiate GLM-HMM and set prior hyperparameters
     prior_sigma = 2
     prior_alpha = 2
-    map_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+    map_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                          observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma),
                          transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 

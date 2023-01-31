@@ -5,18 +5,18 @@ import autograd.numpy as np
 import autograd.numpy.random as npr
 from autograd import value_and_grad
 
-from ssm.optimizers import adam_step, rmsprop_step, sgd_step, convex_combination
-from ssm.primitives import hmm_normalizer
-from ssm.messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi
-from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
+from ssm_customized.optimizers import adam_step, rmsprop_step, sgd_step, convex_combination
+from ssm_customized.primitives import hmm_normalizer
+from ssm_customized.messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi
+from ssm_customized.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, \
     replicate, collapse, ssm_pbar
 
-import ssm.observations as obs
-import ssm.transitions as trans
-import ssm.init_state_distns as isd
-import ssm.hierarchical as hier
-import ssm.emissions as emssn
+import ssm_customized.observations as obs
+import ssm_customized.transitions as trans
+import ssm_customized.init_state_distns as isd
+import ssm_customized.hierarchical as hier
+import ssm_customized.emissions as emssn
 
 __all__ = ['HMM', 'HSMM']
 
@@ -156,7 +156,8 @@ class HMM(object):
         self.transitions.permute(perm)
         self.observations.permute(perm)
 
-    def sample(self, T, output, prefix=None, input=None, tag=None, with_noise=True, rnn=False):
+    def sample(self, T, output, prefix=None, input=None, tag=None, with_noise=True, rnn=False,
+               last_choice_input_ind=None):
         """
         Sample synthetic data from the model. Optionally, condition on a given
         prefix (preceding discrete states and data).
@@ -220,10 +221,11 @@ class HMM(object):
                 pi0 = self.init_state_distn.initial_state_distn
                 z[0] = npr.choice(self.K, p=pi0)
                 data[0] = self.observations.sample_x(z[0], data[:0], input=input[0], with_noise=with_noise)
-                if data[0] == [0]:
-                    input[1, 4] = -1
-                else:
-                    input[1, 4] = 1
+                if last_choice_input_ind is not None:
+                    if data[0] == [0]:
+                        input[1, last_choice_input_ind] = -1
+                    else:
+                        input[1, last_choice_input_ind] = 1
 
                 # We only need to sample T-1 datapoints now
                 T = T - 1
@@ -247,11 +249,11 @@ class HMM(object):
                 z[t] = npr.choice(self.K, p=Pt[z[t-1]])
                 data[t] = self.observations.sample_x(z[t], data[:t], input=input[t], tag=tag,
                                                      with_noise=with_noise)
-                if t < pad+T-1:
+                if last_choice_input_ind is not None and t < pad+T-1:
                     if data[t] == [0]:
-                        input[t+1, 4] = -1
+                        input[t+1, last_choice_input_ind] = -1
                     else:
-                        input[t+1, 4] = 1
+                        input[t+1, last_choice_input_ind] = 1
         else:
             pad = 1
             z = np.zeros(T, dtype=int)
@@ -263,12 +265,13 @@ class HMM(object):
             pi0 = self.init_state_distn.initial_state_distn
             z[0] = npr.choice(self.K, p=pi0)
 
-            if data[0] == [1]:
-                data[0] = [1]
-                input[1, 4] = -1
-            else:
-                data[0] = [0]
-                input[1, 4] = 1
+            if last_choice_input_ind is not None:
+                if data[0] == [1]:
+                    data[0] = [1]
+                    input[1, last_choice_input_ind] = -1
+                else:
+                    data[0] = [0]
+                    input[1, last_choice_input_ind] = 1
 
             # We only need to sample T-1 datapoints now
             T = T - 1
@@ -278,13 +281,13 @@ class HMM(object):
                 Pt = self.transitions.transition_matrices(data[t - 1:t + 1], input[t - 1:t + 1], mask=mask[t - 1:t + 1], tag=tag)[0]
                 z[t] = npr.choice(self.K, p=Pt[z[t - 1]])
 
-                if t < pad + T - 1:
+                if last_choice_input_ind is not None and t < pad + T - 1:
                     if data[t] == [1]:
                         data[t] = [1]
-                        input[t + 1, 4] = -1
+                        input[t + 1, last_choice_input_ind] = -1
                     else:
                         data[t] = [0]
-                        input[t + 1, 4] = 1
+                        input[t + 1, last_choice_input_ind] = 1
 
             if data[T] == [1]:
                 data[T] = [1]

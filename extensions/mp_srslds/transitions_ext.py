@@ -7,13 +7,13 @@ from autograd.scipy.special import logsumexp
 from autograd.scipy.stats import dirichlet
 from autograd import hessian
 
-from ssm.util import one_hot, logistic, relu, rle, ensure_args_are_lists, LOG_EPS, DIV_EPS
-from ssm.regression import fit_multiclass_logistic_regression, fit_negative_binomial_integer_r
-from ssm.stats import multivariate_normal_logpdf
-from ssm.optimizers import adam, bfgs, lbfgs, rmsprop, sgd
+from ssm_customized.util import one_hot, logistic, relu, rle, ensure_args_are_lists, LOG_EPS, DIV_EPS
+from ssm_customized.regression import fit_multiclass_logistic_regression, fit_negative_binomial_integer_r
+from ssm_customized.stats import multivariate_normal_logpdf
+from ssm_customized.optimizers import adam, bfgs, lbfgs, rmsprop, sgd
 
 
-from ssm.transitions import Transitions, InputDrivenTransitions
+from ssm_customized.transitions import Transitions, InputDrivenTransitions
 
 
 class StickyRecurrentTransitions(InputDrivenTransitions):

@@ -1,8 +1,8 @@
 import numpy as np
 import numpy.random as npr
 import matplotlib.pyplot as plt
-import ssm
-from ssm.util import find_permutation
+import ssm_customized
+from ssm_customized.util import find_permutation
 
 npr.seed(0)
 
@@ -13,7 +13,7 @@ num_categories = 2    # number of categories for output
 input_dim = 2         # input dimensions
 
 # Make a GLM-HMM
-true_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+true_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                    observation_kwargs=dict(C=num_categories), transitions="standard")
 
 
@@ -72,7 +72,7 @@ for sess in range(num_sess):
 true_ll = true_glmhmm.log_probability(true_choices, inputs=inpts)
 print("true ll = " + str(true_ll))
 
-new_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+new_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
                    observation_kwargs=dict(C=num_categories), transitions="standard")
 
 N_iters = 200 # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
@@ -182,7 +182,7 @@ plt.ylabel('frac. occupancy', fontsize=15)
 # Instantiate GLM-HMM and set prior hyperparameters
 prior_sigma = 2
 prior_alpha = 2
-map_glmhmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
+map_glmhmm = ssm_customized.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
              observation_kwargs=dict(C=num_categories,prior_sigma=prior_sigma),
              transitions="sticky", transition_kwargs=dict(alpha=prior_alpha,kappa=0))
 
