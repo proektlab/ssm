@@ -5,19 +5,24 @@ import matplotlib.pyplot as plt
 import ssm_customized
 import json
 from ssm_customized.util import find_permutation
+from gonogo_data_helpers import DATA_DIR, get_inputs_from_results_dict
+import scipy.io
 
 npr.seed(0)
 
 # Set the parameters of the GLM-HMM
-num_states = 2        # number of discrete states
+num_states = 3        # number of discrete states
 obs_dim = 1           # number of observed dimensions
 num_categories = 2    # number of categories for output
 input_dim = 6         # input dimensions
 t = 60                # window
 fileNum = 1
 
+
 inputs = np.zeros((fileNum, 1, 3, 64, 1200))
 output = np.zeros((fileNum, 1, 1200), dtype=int)
+result = scipy.io.loadmat('Z:/eblackwood/gonogo_stuff/gain-gonogo/_data/CA046/CA046_1706201335_training.mat')
+print(get_inputs_from_results_dict('Z:/eblackwood/gonogo_stuff/gain-gonogo/_data/CA046/CA046_1706201335_training.mat', result))
 for i in range(fileNum):
     infile = open("C:\\Users\\kimliu\\Documents\\glm-hmm-main\\glm-hmm-main\\ssm\\rnn_data\\gru_0.2_inputs"+str(3)+".json", 'r')
     inputs[i] = np.array(json.load(infile))

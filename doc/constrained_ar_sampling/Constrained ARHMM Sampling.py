@@ -32,11 +32,11 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as manimation
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-import ssm
-from ssm.primitives import hmm_sample, lds_sample
-from ssm.observations import GaussianObservations
-from ssm.init_state_distns import InitialStateDistribution
-from ssm.preprocessing import trend_filter, pca_with_imputation
+import ssm_customized
+from ssm_customized.primitives import hmm_sample, lds_sample
+from ssm_customized.observations import GaussianObservations
+from ssm_customized.init_state_distns import InitialStateDistribution
+from ssm_customized.preprocessing import trend_filter, pca_with_imputation
 
 
 # In[2]:
@@ -262,7 +262,7 @@ for mu in mog.observations.mus:
 # In[9]:
 
 
-arhmm = ssm.HMM(K=8, D=D, observations="ar")
+arhmm = ssm_customized.HMM(K=8, D=D, observations="ar")
 arhmm.fit(x)
 
 

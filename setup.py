@@ -13,25 +13,25 @@ print("USE_OPENMP", USE_OPENMP)
 extensions = []
 
 extensions.append(
-    Extension('ssm.cstats',
+    Extension('ssm_customized.cstats',
               extra_compile_args=["-fopenmp"] if USE_OPENMP else [],
               extra_link_args=["-fopenmp"] if USE_OPENMP else [],
               language="c++",
-              sources=["ssm/cstats.pyx"],
+              sources=["ssm_customized/cstats.pyx"],
               )
 )
 
 extensions = cythonize(extensions)
 
 
-setup(name='ssm',
+setup(name='ssm_customized',
       version='0.0.1',
       description='Bayesian learning and inference for a variety of state space models',
       author='Scott Linderman',
       author_email='scott.linderman@stanford.edu',
       url='https://github.com/slinderman/ssm',
       install_requires=['future', 'numpy', 'scipy', 'matplotlib', 'numba', 'scikit-learn', 'tqdm', 'autograd', 'seaborn'],
-      packages=['ssm','ssm.extensions','ssm.extensions.mp_srslds'],
+      packages=['ssm_customized','ssm_customized.extensions','ssm_customized.extensions.mp_srslds'],
       ext_modules=extensions,
       include_dirs=[np.get_include(),],
       )
